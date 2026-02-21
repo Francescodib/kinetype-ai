@@ -132,7 +132,7 @@ function buildModeBar(
   const credits = document.createElement('div');
   Object.assign(credits.style, {
     fontFamily: 'monospace',
-    fontSize: '10px',
+    fontSize: '11px',
     color: '#e0ffe0',
     opacity: '0.55',
     whiteSpace: 'nowrap',
