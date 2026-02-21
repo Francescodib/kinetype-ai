@@ -12,15 +12,28 @@ export class Particle implements ParticleState {
   alpha = 1;
   radius = 1.5;
 
-  /** Blend factor toward hitColor when force is applied (0 = base, 1 = hit). */
+  /** True while the particle is frozen by freeze-mode body contact. */
+  frozen = false;
+
+  /** Blend factor toward hitColor (0 = base color, 1 = hit color). */
   private colorBlend = 0;
 
   update(dt: number, forceX: number, forceY: number, friction: number, ease: number): void {
+    if (this.frozen) {
+      // Frozen: very slow drift back home, no velocity accumulation
+      const dx = this.homeX - this.x;
+      const dy = this.homeY - this.y;
+      this.x += dx * 0.005;
+      this.y += dy * 0.005;
+      this.colorBlend *= 0.98;
+      return;
+    }
+
     // Apply external force
     this.vx += forceX;
     this.vy += forceY;
 
-    // Spring toward home position
+    // Spring toward home
     const dx = this.homeX - this.x;
     const dy = this.homeY - this.y;
     this.vx += dx * ease;
@@ -30,17 +43,17 @@ export class Particle implements ParticleState {
     this.vx *= friction;
     this.vy *= friction;
 
-    // Integrate
+    // Euler integration
     this.x += this.vx * dt;
     this.y += this.vy * dt;
 
-    // Color blend: fade toward hitColor with force magnitude, then decay
+    // Color blend proportional to force magnitude, decays per frame
     const forceMag = Math.sqrt(forceX * forceX + forceY * forceY);
-    this.colorBlend = Math.min(1, this.colorBlend + forceMag * 0.15);
-    this.colorBlend *= 0.92; // decay per frame
+    this.colorBlend = Math.min(1, this.colorBlend + forceMag * 0.12);
+    this.colorBlend *= 0.92;
   }
 
-  /** Returns the interpolated display color between base and hit color. */
+  /** Interpolated display color between base and hit color. */
   get displayColor(): number {
     if (this.colorBlend < 0.01) return this.color;
     const t = this.colorBlend;
@@ -56,6 +69,7 @@ export class Particle implements ParticleState {
     this.vx = 0;
     this.vy = 0;
     this.colorBlend = 0;
+    this.frozen = false;
     this.alpha = 1;
   }
 }

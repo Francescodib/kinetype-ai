@@ -204,15 +204,15 @@ async function main(): Promise<void> {
       currentMask = segmenter.lastMask;
       renderer.setMask(currentMask);
 
-      // Motion intensity
+      // Motion intensity + mask density
       if (currentMask) {
-        motionIntensity = motionAnalyzer.analyze(currentMask);
-        const total = currentMask.width * currentMask.height;
+        const result = motionAnalyzer.analyze(currentMask);
+        motionIntensity = result.motionIntensity;
         let person = 0;
         for (let i = 0; i < currentMask.data.length; i++) {
           if (currentMask.data[i] > 0) person++;
         }
-        maskDensity = person / total;
+        maskDensity = person / currentMask.data.length;
       }
 
       // Text cycling: Space or timer

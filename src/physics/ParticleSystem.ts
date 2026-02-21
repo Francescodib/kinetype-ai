@@ -3,17 +3,24 @@ import { TextSampler } from './TextSampler.js';
 import type { SamplePoint } from './TextSampler.js';
 import type { Vec2, SegmentationMask, SimConfig } from '../types/index.js';
 
+/** Canvas-space AABB of the last known silhouette. */
+interface SilhouetteBBox {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
 export class ParticleSystem {
   private particles: Particle[] = [];
   private targetCount: number;
   private readonly maxParticles: number;
   private readonly sampler = new TextSampler();
   private homePositions: SamplePoint[] = [];
+  private lastBBox: SilhouetteBBox | null = null;
 
-  // Config
   config: SimConfig;
 
-  // Mouse interaction
   private mousePos: Vec2 | null = null;
   private readonly mouseRadius = 80;
 
@@ -23,7 +30,6 @@ export class ParticleSystem {
     this.targetCount = config.particleCount;
   }
 
-  /** Sample text and (re)initialize all particles at home positions. */
   init(text: string, canvasWidth: number, canvasHeight: number): void {
     this.homePositions = this.sampler.sample({
       text,
@@ -31,11 +37,9 @@ export class ParticleSystem {
       canvasHeight,
       maxParticles: this.maxParticles,
     });
-
     this._rebuildParticles(this.homePositions);
   }
 
-  /** Transition particles to new text home positions (smooth morph). */
   transitionTo(text: string, canvasWidth: number, canvasHeight: number): void {
     const newHomes = this.sampler.sample({
       text,
@@ -43,20 +47,17 @@ export class ParticleSystem {
       canvasHeight,
       maxParticles: this.maxParticles,
     });
-
     this.homePositions = newHomes;
 
-    // Remap existing particles to new homes
     const count = Math.min(this.particles.length, newHomes.length);
     for (let i = 0; i < count; i++) {
       this.particles[i].homeX = newHomes[i].homeX;
       this.particles[i].homeY = newHomes[i].homeY;
+      this.particles[i].frozen = false;
     }
 
-    // If new word needs more particles, add them
     for (let i = count; i < newHomes.length && i < this.targetCount; i++) {
       const p = new Particle();
-      // Scatter from random existing position before settling
       const src = this.particles[Math.floor(Math.random() * this.particles.length)];
       p.x = src ? src.x : Math.random() * canvasWidth;
       p.y = src ? src.y : Math.random() * canvasHeight;
@@ -65,7 +66,6 @@ export class ParticleSystem {
       this.particles.push(p);
     }
 
-    // Trim excess
     if (this.particles.length > newHomes.length) {
       this.particles.length = newHomes.length;
     }
@@ -78,7 +78,6 @@ export class ParticleSystem {
       const p = new Particle();
       p.homeX = homes[i].homeX;
       p.homeY = homes[i].homeY;
-      // Start scattered randomly for entrance animation
       p.x = homes[i].homeX + (Math.random() - 0.5) * 400;
       p.y = homes[i].homeY + (Math.random() - 0.5) * 400;
       this.particles.push(p);
@@ -89,7 +88,6 @@ export class ParticleSystem {
     this.mousePos = pos;
   }
 
-  /** Reduce active particle count by 25% for dynamic LOD. */
   reduceLOD(): void {
     this.targetCount = Math.max(500, Math.floor(this.targetCount * 0.75));
     if (this.particles.length > this.targetCount) {
@@ -97,20 +95,9 @@ export class ParticleSystem {
     }
   }
 
-  /** Restore particle count toward max for dynamic LOD. */
   restoreLOD(canvasWidth: number, canvasHeight: number): void {
     if (this.targetCount >= this.maxParticles) return;
     this.targetCount = Math.min(this.maxParticles, Math.floor(this.targetCount * 1.33));
-
-    // Re-init to get proper homes for the restored count
-    const newHomes = this.sampler.sample({
-      text: '', // will use cached home positions
-      canvasWidth,
-      canvasHeight,
-      maxParticles: this.targetCount,
-    });
-
-    // Add new particles from existing home positions
     const homes = this.homePositions.slice(this.particles.length, this.targetCount);
     for (const home of homes) {
       const p = new Particle();
@@ -120,31 +107,46 @@ export class ParticleSystem {
       p.y = home.homeY + (Math.random() - 0.5) * 200;
       this.particles.push(p);
     }
-
-    void newHomes; // only used for length reference above
+    void canvasWidth;
+    void canvasHeight;
   }
 
   /**
-   * Update all particles.
-   * @param dt  Delta time in seconds (from Pixi ticker)
-   * @param mask  Latest segmentation mask (may be null)
-   * @param maskMotionScale  0–1 scale from MotionAnalyzer (1 = full force)
+   * Update all particles for one frame.
+   * @param dt               Delta-time in seconds (from Pixi ticker)
+   * @param mask             Latest segmentation mask (null = no camera)
+   * @param motionIntensity  0–1 from MotionAnalyzer
+   * @param canvasWidth      Pixi canvas width in CSS pixels
+   * @param canvasHeight     Pixi canvas height in CSS pixels
    */
   updateAll(
     dt: number,
     mask: SegmentationMask | null,
-    maskMotionScale: number,
+    motionIntensity: number,
     canvasWidth: number,
     canvasHeight: number
   ): void {
     const { friction, ease, repulsionForce, mode } = this.config;
-    const dtCapped = Math.min(dt, 0.05); // cap at 50ms to avoid tunneling
+    const dtCapped = Math.min(dt, 0.05);
+
+    // Recompute silhouette bounding box once per frame
+    if (mask) {
+      this.lastBBox = this._computeBBox(mask, canvasWidth, canvasHeight);
+    }
+
+    // Body center from bbox (used by repulse/attract/vortex)
+    const bodyX = this.lastBBox
+      ? (this.lastBBox.minX + this.lastBBox.maxX) / 2
+      : canvasWidth / 2;
+    const bodyY = this.lastBBox
+      ? (this.lastBBox.minY + this.lastBBox.maxY) / 2
+      : canvasHeight / 2;
 
     for (const p of this.particles) {
       let fx = 0;
       let fy = 0;
 
-      // Mouse interaction (always active for testing)
+      // ── Mouse repulsion ─────────────────────────────────────────────────
       if (this.mousePos) {
         const mdx = p.x - this.mousePos.x;
         const mdy = p.y - this.mousePos.y;
@@ -158,51 +160,105 @@ export class ParticleSystem {
         }
       }
 
-      // Mask-based interaction
-      if (mask && maskMotionScale > 0.02) {
-        const mx = Math.floor((p.x / canvasWidth) * mask.width);
-        const my = Math.floor((p.y / canvasHeight) * mask.height);
+      // ── Body segmentation interaction ────────────────────────────────────
+      if (mask && motionIntensity > 0.01) {
+        // Bounding-box early rejection: 40px margin around silhouette
+        const inBBox =
+          !this.lastBBox ||
+          (p.x >= this.lastBBox.minX - 40 &&
+            p.x <= this.lastBBox.maxX + 40 &&
+            p.y >= this.lastBBox.minY - 40 &&
+            p.y <= this.lastBBox.maxY + 40);
 
-        if (mx >= 0 && mx < mask.width && my >= 0 && my < mask.height) {
-          const maskVal = mask.data[my * mask.width + mx];
-          const isPerson = maskVal > 0;
+        if (inBBox) {
+          // Scale canvas coords → mask coords
+          const mx = Math.floor((p.x / canvasWidth) * mask.width);
+          const my = Math.floor((p.y / canvasHeight) * mask.height);
 
-          if (isPerson) {
-            const scale = repulsionForce * maskMotionScale;
-            const dx = p.x - canvasWidth / 2;
-            const dy = p.y - canvasHeight / 2;
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          if (mx >= 0 && mx < mask.width && my >= 0 && my < mask.height) {
+            const isPerson = mask.data[my * mask.width + mx] > 0;
 
-            switch (mode) {
-              case 'repulse': {
-                fx += (dx / dist) * scale;
-                fy += (dy / dist) * scale;
-                break;
+            if (isPerson) {
+              const scale = repulsionForce * motionIntensity;
+              // Radial direction from body center to particle
+              const dx = p.x - bodyX;
+              const dy = p.y - bodyY;
+              const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+              switch (mode) {
+                case 'repulse': {
+                  fx += (dx / dist) * scale;
+                  fy += (dy / dist) * scale;
+                  break;
+                }
+                case 'attract': {
+                  // Pull inward toward body center
+                  fx -= (dx / dist) * scale * 0.6;
+                  fy -= (dy / dist) * scale * 0.6;
+                  break;
+                }
+                case 'vortex': {
+                  // Tangential (perpendicular) → orbital motion
+                  fx += (-dy / dist) * scale;
+                  fy += (dx / dist) * scale;
+                  break;
+                }
+                case 'freeze': {
+                  p.vx *= 0.75;
+                  p.vy *= 0.75;
+                  p.frozen = true;
+                  break;
+                }
               }
-              case 'attract': {
-                fx -= (dx / dist) * scale * 0.5;
-                fy -= (dy / dist) * scale * 0.5;
-                break;
-              }
-              case 'vortex': {
-                // Tangential (perpendicular) force
-                fx += (-dy / dist) * scale;
-                fy += (dx / dist) * scale;
-                break;
-              }
-              case 'freeze': {
-                // Damp velocity to stop the particle
-                p.vx *= 0.85;
-                p.vy *= 0.85;
-                break;
-              }
+            } else {
+              // Particle outside body → unfreeze
+              if (p.frozen) p.frozen = false;
             }
           }
         }
+      } else {
+        // No mask / zero motion → thaw
+        if (p.frozen) p.frozen = false;
       }
 
       p.update(dtCapped, fx, fy, friction, ease);
     }
+  }
+
+  /** Compute silhouette AABB in canvas-space, scanning the full mask. */
+  private _computeBBox(
+    mask: SegmentationMask,
+    canvasWidth: number,
+    canvasHeight: number
+  ): SilhouetteBBox | null {
+    let minMX = mask.width;
+    let maxMX = 0;
+    let minMY = mask.height;
+    let maxMY = 0;
+    let found = false;
+
+    for (let my = 0; my < mask.height; my++) {
+      for (let mx = 0; mx < mask.width; mx++) {
+        if (mask.data[my * mask.width + mx] > 0) {
+          if (mx < minMX) minMX = mx;
+          if (mx > maxMX) maxMX = mx;
+          if (my < minMY) minMY = my;
+          if (my > maxMY) maxMY = my;
+          found = true;
+        }
+      }
+    }
+
+    if (!found) return null;
+
+    const scaleX = canvasWidth / mask.width;
+    const scaleY = canvasHeight / mask.height;
+    return {
+      minX: minMX * scaleX,
+      maxX: maxMX * scaleX,
+      minY: minMY * scaleY,
+      maxY: maxMY * scaleY,
+    };
   }
 
   get activeParticles(): Particle[] {
@@ -211,5 +267,9 @@ export class ParticleSystem {
 
   get count(): number {
     return this.particles.length;
+  }
+
+  get silhouetteBBox(): SilhouetteBBox | null {
+    return this.lastBBox;
   }
 }
