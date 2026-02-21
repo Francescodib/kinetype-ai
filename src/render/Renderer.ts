@@ -49,7 +49,7 @@ export class Renderer {
   async init(): Promise<void> {
     this.app = new Application();
     await this.app.init({
-      background: 0x0a0a0f,
+      backgroundAlpha: 0,        // transparent so webcam video shows through
       resizeTo: window,
       antialias: false,
       resolution: window.devicePixelRatio || 1,
@@ -58,9 +58,9 @@ export class Renderer {
 
     document.body.appendChild(this.app.canvas as HTMLCanvasElement);
     (this.app.canvas as HTMLCanvasElement).style.cssText =
-      'position:fixed;top:0;left:0;width:100%;height:100%;z-index:2;';
+      'position:fixed;top:0;left:0;width:100%;height:100%;z-index:2;background:transparent;';
 
-    this.circleTexture = this._makeCircleTexture(4);
+    this.circleTexture = this._makeCircleTexture(2);
 
     // Glow layer: blurred Container with Sprites, drawn under main particles
     this.glowContainer = new Container();

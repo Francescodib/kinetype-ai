@@ -79,8 +79,8 @@ export class ParticleSystem {
       const p = new Particle();
       p.homeX = homes[i].homeX;
       p.homeY = homes[i].homeY;
-      p.x = homes[i].homeX + (Math.random() - 0.5) * 400;
-      p.y = homes[i].homeY + (Math.random() - 0.5) * 400;
+      p.x = homes[i].homeX + (Math.random() - 0.5) * 80;
+      p.y = homes[i].homeY + (Math.random() - 0.5) * 80;
       this.particles.push(p);
     }
   }
@@ -109,8 +109,8 @@ export class ParticleSystem {
       const p = new Particle();
       p.homeX = home.homeX;
       p.homeY = home.homeY;
-      p.x = home.homeX + (Math.random() - 0.5) * 200;
-      p.y = home.homeY + (Math.random() - 0.5) * 200;
+      p.x = home.homeX + (Math.random() - 0.5) * 60;
+      p.y = home.homeY + (Math.random() - 0.5) * 60;
       this.particles.push(p);
     }
     void canvasWidth;

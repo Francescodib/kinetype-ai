@@ -295,12 +295,43 @@ async function main(): Promise<void> {
   // ── Camera setup ──────────────────────────────────────────────────────────
 
   const camera = new Camera();
+
+  // Dark tint layer between webcam video and Pixi canvas.
+  // Becomes visible when camera is live so the video feed is readable but subdued.
+  const videoTint = document.createElement('div');
+  videoTint.id = 'video-tint';
+  Object.assign(videoTint.style, {
+    position: 'fixed',
+    inset: '0',
+    background: 'rgba(0,0,0,0.62)',
+    zIndex: '1',
+    display: 'none',
+    pointerEvents: 'none',
+  });
+  document.body.appendChild(videoTint);
+
+  // Video element goes at z-index 0, behind the tint and Pixi canvas
+  Object.assign(camera.videoElement.style, {
+    position: 'fixed',
+    top: '0',
+    left: '0',
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    transform: 'scaleX(-1)',
+    zIndex: '0',
+    display: 'none',        // shown only when camera is live
+    pointerEvents: 'none',
+  });
   document.body.appendChild(camera.videoElement);
 
   async function enableCamera(): Promise<void> {
     try {
       await camera.start();
       cameraLive = true;
+      // Show the webcam feed behind the canvas
+      camera.videoElement.style.display = 'block';
+      videoTint.style.display = 'block';
       demoMode.stop();
       currentMask = null;
       motionAnalyzer.reset();

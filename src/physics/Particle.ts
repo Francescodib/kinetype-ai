@@ -19,29 +19,34 @@ export class Particle implements ParticleState {
   private colorBlend = 0;
 
   update(dt: number, forceX: number, forceY: number, friction: number, ease: number): void {
+    // Normalize to 60fps so spring/friction behave consistently at any frame rate.
+    // Clamp to 3× to prevent explosion at very low FPS (< 20fps).
+    const dtN = Math.min(dt * 60, 3);
+
     if (this.frozen) {
       // Frozen: very slow drift back home, no velocity accumulation
       const dx = this.homeX - this.x;
       const dy = this.homeY - this.y;
-      this.x += dx * 0.005;
-      this.y += dy * 0.005;
-      this.colorBlend *= 0.98;
+      this.x += dx * 0.005 * dtN;
+      this.y += dy * 0.005 * dtN;
+      this.colorBlend *= Math.pow(0.98, dtN);
       return;
     }
 
-    // Apply external force
+    // Apply external force (intentionally not dt-scaled: force is a per-frame impulse)
     this.vx += forceX;
     this.vy += forceY;
 
-    // Spring toward home
+    // Spring toward home (dt-normalized so convergence rate is FPS-independent)
     const dx = this.homeX - this.x;
     const dy = this.homeY - this.y;
-    this.vx += dx * ease;
-    this.vy += dy * ease;
+    this.vx += dx * ease * dtN;
+    this.vy += dy * ease * dtN;
 
-    // Friction
-    this.vx *= friction;
-    this.vy *= friction;
+    // Friction (dt-normalized so damping is FPS-independent)
+    const fric = Math.pow(friction, dtN);
+    this.vx *= fric;
+    this.vy *= fric;
 
     // Euler integration
     this.x += this.vx * dt;
@@ -50,7 +55,7 @@ export class Particle implements ParticleState {
     // Color blend proportional to force magnitude, decays per frame
     const forceMag = Math.sqrt(forceX * forceX + forceY * forceY);
     this.colorBlend = Math.min(1, this.colorBlend + forceMag * 0.12);
-    this.colorBlend *= 0.92;
+    this.colorBlend *= Math.pow(0.92, dtN);
   }
 
   /** Interpolated display color between base and hit color. */
