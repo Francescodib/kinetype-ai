@@ -1,19 +1,24 @@
 import { Camera } from './camera/Camera.js';
 import { Segmenter } from './ai/Segmenter.js';
 import { StatsOverlay } from './ui/StatsOverlay.js';
+import { DemoMode } from './ui/DemoMode.js';
+import { SettingsPanel } from './ui/SettingsPanel.js';
+import { PrivacyBanner } from './ui/PrivacyBanner.js';
 import { ParticleSystem } from './physics/ParticleSystem.js';
+import { TextCycler } from './physics/TextCycler.js';
 import { Renderer } from './render/Renderer.js';
 import { MotionAnalyzer } from './utils/MotionAnalyzer.js';
 import type { SegmentationMask, InteractionMode, SimConfig } from './types/index.js';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── iOS warning ───────────────────────────────────────────────────────────────
 
-const PHRASES = ['KINETYPE', 'MOVE ME', 'HELLO', 'TOUCH ME', 'PLAY'];
-const PHRASE_INTERVAL_MS = 8000;
+function isIOS(): boolean {
+  return /iP(hone|od|ad)/.test(navigator.userAgent);
+}
 
-// ── UI helpers ────────────────────────────────────────────────────────────────
+// ── Loading screen ────────────────────────────────────────────────────────────
 
-function buildLoadingScreen(): HTMLElement {
+function buildLoadingScreen(): { el: HTMLElement; msg: HTMLElement; bar: HTMLElement } {
   const el = document.createElement('div');
   el.id = 'loading-screen';
   Object.assign(el.style, {
@@ -36,7 +41,11 @@ function buildLoadingScreen(): HTMLElement {
     </div>
   `;
   document.body.appendChild(el);
-  return el;
+  return {
+    el,
+    msg: el.querySelector('#loading-msg') as HTMLElement,
+    bar: el.querySelector('#loading-bar') as HTMLElement,
+  };
 }
 
 function buildErrorScreen(message: string): void {
@@ -61,7 +70,9 @@ function buildErrorScreen(message: string): void {
   document.body.appendChild(el);
 }
 
-function buildModeUI(
+// ── Mode switcher bottom bar ──────────────────────────────────────────────────
+
+function buildModeBar(
   config: SimConfig,
   onChange: (mode: InteractionMode) => void
 ): void {
@@ -79,12 +90,11 @@ function buildModeUI(
 
   const modes: InteractionMode[] = ['repulse', 'attract', 'vortex', 'freeze'];
   const labels = ['1 Repulse', '2 Attract', '3 Vortex', '4 Freeze'];
-
   const buttons: HTMLButtonElement[] = [];
+
   modes.forEach((mode, i) => {
     const btn = document.createElement('button');
     btn.textContent = labels[i];
-    btn.dataset['mode'] = mode;
     Object.assign(btn.style, {
       background: mode === config.mode ? '#39ff14' : 'rgba(0,0,0,0.6)',
       color: mode === config.mode ? '#000' : '#39ff14',
@@ -110,18 +120,13 @@ function buildModeUI(
 
   document.body.appendChild(panel);
 
-  // Keyboard shortcuts 1–4
   window.addEventListener('keydown', e => {
     const idx = ['1', '2', '3', '4'].indexOf(e.key);
-    if (idx >= 0) buttons[idx].click();
+    if (idx >= 0) buttons[idx]?.click();
   });
 }
 
-function isIOS(): boolean {
-  return /iP(hone|od|ad)/.test(navigator.userAgent);
-}
-
-// ── App bootstrap ─────────────────────────────────────────────────────────────
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   document.body.style.cssText = 'margin:0;overflow:hidden;background:#0a0a0f;';
@@ -133,43 +138,26 @@ async function main(): Promise<void> {
     return;
   }
 
-  const loadingScreen = buildLoadingScreen();
-  const loadingMsg = document.getElementById('loading-msg') as HTMLElement;
-  const loadingBar = document.getElementById('loading-bar') as HTMLElement;
+  const loading = buildLoadingScreen();
 
-  // Load AI model
+  // ── Load AI model ──────────────────────────────────────────────────────────
+
   const segmenter = new Segmenter();
   try {
-    loadingBar.style.width = '20%';
+    loading.bar.style.width = '20%';
     await segmenter.load();
-    loadingBar.style.width = '65%';
+    loading.bar.style.width = '65%';
   } catch (err) {
     console.error('Failed to load segmentation model:', err);
-    loadingScreen.remove();
+    loading.el.remove();
     buildErrorScreen('Failed to load AI model. Check your internet connection and refresh.');
     return;
   }
 
-  // Request webcam
-  loadingMsg.textContent = 'Requesting webcam\u2026';
-  loadingBar.style.width = '80%';
+  loading.msg.textContent = 'Initialising\u2026';
+  loading.bar.style.width = '85%';
 
-  const camera = new Camera();
-  document.body.appendChild(camera.videoElement);
-
-  let cameraAvailable = true;
-  try {
-    await camera.start();
-  } catch {
-    cameraAvailable = false;
-    // Mouse-only fallback — don't show error prominently
-    console.warn('Webcam unavailable, running in mouse-only mode.');
-  }
-
-  loadingBar.style.width = '90%';
-  loadingMsg.textContent = 'Building particle system\u2026';
-
-  // ── Config ────────────────────────────────────────────────────────────────
+  // ── Simulation config ─────────────────────────────────────────────────────
 
   const config: SimConfig = {
     particleCount: 6000,
@@ -179,57 +167,47 @@ async function main(): Promise<void> {
     mode: 'repulse',
   };
 
-  // ── Particle system ───────────────────────────────────────────────────────
+  // ── Core systems ──────────────────────────────────────────────────────────
 
   const particleSystem = new ParticleSystem(config);
   const motionAnalyzer = new MotionAnalyzer();
   const stats = new StatsOverlay();
 
-  let currentPhraseIdx = 0;
-  let lastPhraseTime = 0;
   let motionIntensity = 0;
   let maskDensity = 0;
   let currentMask: SegmentationMask | null = null;
+  let cameraLive = false;
 
   // ── Renderer ──────────────────────────────────────────────────────────────
 
   const renderer = new Renderer({
     particleSystem,
     onUpdate: (dt, _mask, now) => {
-      // Feed AI frame
-      if (cameraAvailable && camera.isReady) {
+      // AI segmentation (only when camera is live)
+      if (cameraLive) {
         segmenter.segmentFrame(camera.videoElement);
-      }
-
-      currentMask = segmenter.lastMask;
-      renderer.setMask(currentMask);
-
-      // Motion intensity + mask density
-      if (currentMask) {
-        const result = motionAnalyzer.analyze(currentMask);
-        motionIntensity = result.motionIntensity;
-        let person = 0;
-        for (let i = 0; i < currentMask.data.length; i++) {
-          if (currentMask.data[i] > 0) person++;
+        const seg = segmenter.lastMask;
+        if (seg) {
+          currentMask = seg;
+          const result = motionAnalyzer.analyze(seg);
+          motionIntensity = result.motionIntensity;
+          let person = 0;
+          for (let i = 0; i < seg.data.length; i++) {
+            if (seg.data[i] > 0) person++;
+          }
+          maskDensity = person / seg.data.length;
         }
-        maskDensity = person / currentMask.data.length;
       }
 
-      // Text cycling: Space or timer
-      if (now - lastPhraseTime > PHRASE_INTERVAL_MS) {
-        _nextPhrase(now);
-      }
+      // Text cycling
+      textCycler.tick(now);
 
-      particleSystem.updateAll(
-        dt,
-        currentMask,
-        motionIntensity,
-        renderer.canvasWidth,
-        renderer.canvasHeight
-      );
+      // Physics
+      particleSystem.updateAll(dt, currentMask, motionIntensity, renderer.canvasWidth, renderer.canvasHeight);
 
+      // Stats
       stats.update({
-        aiFps: segmenter.fps,
+        aiFps: cameraLive ? segmenter.fps : 0,
         maskDensity,
         motionIntensity,
         particleCount: particleSystem.count,
@@ -237,88 +215,126 @@ async function main(): Promise<void> {
         renderFps: renderer.fps,
       });
     },
-    onLodReduce: () => {
-      particleSystem.reduceLOD();
-    },
-    onLodRestore: () => {
-      particleSystem.restoreLOD(renderer.canvasWidth, renderer.canvasHeight);
-    },
+    onLodReduce: () => particleSystem.reduceLOD(),
+    onLodRestore: () => particleSystem.restoreLOD(renderer.canvasWidth, renderer.canvasHeight),
   });
 
   await renderer.init();
 
-  // Init particles after renderer so canvas dimensions are known
+  // ── Text cycler ───────────────────────────────────────────────────────────
+
+  const PHRASES = ['KINETYPE', 'MOVE ME', 'HELLO', 'TOUCH ME', 'PLAY'];
+
+  const textCycler = new TextCycler({
+    phrases: PHRASES,
+    intervalMs: 8000,
+    canvasWidth: renderer.canvasWidth,
+    canvasHeight: renderer.canvasHeight,
+    maxParticles: config.particleCount,
+  });
+
+  textCycler.onCycleStart((phrase) => {
+    particleSystem.transitionTo(phrase, renderer.canvasWidth, renderer.canvasHeight);
+  });
+
+  // Init particles with first phrase
   particleSystem.init(PHRASES[0], renderer.canvasWidth, renderer.canvasHeight);
-  lastPhraseTime = performance.now();
 
-  loadingBar.style.width = '100%';
+  // Space → next phrase immediately
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space') { e.preventDefault(); textCycler.next(); }
+  });
+
+  // ── Camera setup ──────────────────────────────────────────────────────────
+
+  const camera = new Camera();
+  document.body.appendChild(camera.videoElement);
+
+  async function enableCamera(): Promise<void> {
+    try {
+      await camera.start();
+      cameraLive = true;
+      demoMode.stop();
+      currentMask = null;
+      motionAnalyzer.reset();
+      segmenter.start();
+    } catch {
+      // Permission denied or no camera → stay in mouse-only / demo mode
+      console.warn('Camera unavailable, staying in demo/mouse mode.');
+    }
+  }
+
+  // ── Demo mode ─────────────────────────────────────────────────────────────
+
+  const demoMode = new DemoMode(
+    (mask) => {
+      // Demo masks feed the physics loop if camera not live
+      if (!cameraLive) {
+        currentMask = mask;
+        const result = motionAnalyzer.analyze(mask);
+        motionIntensity = result.motionIntensity * 0.6; // gentler in demo
+        maskDensity = 0.12; // approximate static coverage
+      }
+    },
+    () => { void enableCamera(); }
+  );
+
+  demoMode.start();
+
+  // ── Finish loading ────────────────────────────────────────────────────────
+
+  loading.bar.style.width = '100%';
   await new Promise(r => setTimeout(r, 200));
-  loadingScreen.remove();
+  loading.el.remove();
 
-  // ── Mouse tracking ────────────────────────────────────────────────────────
+  // Try camera automatically (silent fail → demo continues)
+  void enableCamera();
+
+  // ── UI ────────────────────────────────────────────────────────────────────
+
+  new PrivacyBanner().show();
+  new SettingsPanel(config);
+  buildModeBar(config, mode => { config.mode = mode; });
+
+  // Settings panel events → live config
+  document.addEventListener('kta:settings-change', e => {
+    const d = e.detail;
+    if (d.repulsionForce !== undefined) config.repulsionForce = d.repulsionForce;
+    if (d.mode !== undefined) config.mode = d.mode;
+    // particleCount changes require re-init (handled gracefully by LOD)
+  });
+
+  // ── Mouse / touch tracking ────────────────────────────────────────────────
 
   window.addEventListener('mousemove', e => {
     particleSystem.setMousePos({ x: e.clientX, y: e.clientY });
   });
-  window.addEventListener('mouseleave', () => {
-    particleSystem.setMousePos(null);
-  });
+  window.addEventListener('mouseleave', () => particleSystem.setMousePos(null));
 
-  // Touch support
   window.addEventListener('touchmove', e => {
     const t = e.touches[0];
     if (t) particleSystem.setMousePos({ x: t.clientX, y: t.clientY });
   }, { passive: true });
-  window.addEventListener('touchend', () => {
-    particleSystem.setMousePos(null);
-  });
-
-  // ── Text cycling ──────────────────────────────────────────────────────────
-
-  function _nextPhrase(now: number): void {
-    currentPhraseIdx = (currentPhraseIdx + 1) % PHRASES.length;
-    particleSystem.transitionTo(
-      PHRASES[currentPhraseIdx],
-      renderer.canvasWidth,
-      renderer.canvasHeight
-    );
-    lastPhraseTime = now;
-  }
-
-  window.addEventListener('keydown', e => {
-    if (e.code === 'Space') {
-      e.preventDefault();
-      _nextPhrase(performance.now());
-    }
-  });
-
-  // ── Mode switcher UI ──────────────────────────────────────────────────────
-
-  buildModeUI(config, mode => {
-    config.mode = mode;
-  });
+  window.addEventListener('touchend', () => particleSystem.setMousePos(null));
 
   // ── Resize ────────────────────────────────────────────────────────────────
 
   window.addEventListener('resize', () => {
-    particleSystem.init(
-      PHRASES[currentPhraseIdx],
-      renderer.canvasWidth,
-      renderer.canvasHeight
-    );
+    textCycler.resize(renderer.canvasWidth, renderer.canvasHeight);
+    particleSystem.init(textCycler.currentPhrase(), renderer.canvasWidth, renderer.canvasHeight);
   });
 
-  // ── Visibility API ────────────────────────────────────────────────────────
+  // ── Page Visibility API ───────────────────────────────────────────────────
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       segmenter.stop();
+      demoMode.stop();
     } else {
-      segmenter.start();
+      if (cameraLive) segmenter.start();
+      else demoMode.start();
     }
   });
-
-  segmenter.start();
 }
 
 main().catch(console.error);
