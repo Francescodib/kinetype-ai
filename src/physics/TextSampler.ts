@@ -16,7 +16,7 @@ export interface TextSamplerOptions {
  * Below this particle count the sampler places particles on letter edges
  * (perimeter tracing). At or above this count it uses uniform fill.
  */
-const EDGE_BIAS_THRESHOLD = 1500;
+const EDGE_BIAS_THRESHOLD = 1501;
 
 export class TextSampler {
   private readonly offscreen: OffscreenCanvas;
@@ -113,6 +113,20 @@ export class TextSampler {
 
     if (edgePoints.length + interiorPoints.length === 0) return [];
 
+    // Shuffle each group so that subsampling picks random positions rather than
+    // sweeping through scan-order rows. Without this, the row-by-row scanner
+    // causes subsampled edge pixels to land only on the top/bottom rims of each
+    // horizontal stroke — producing visible horizontal "dash rows" on mobile
+    // devices where the system font has thinner strokes than Arial Black.
+    const shuffle = (arr: SamplePoint[]): void => {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+      }
+    };
+    shuffle(edgePoints);
+    shuffle(interiorPoints);
+
     const subsampleArr = (arr: SamplePoint[], count: number): SamplePoint[] => {
       if (arr.length <= count) return arr;
       const step = arr.length / count;
@@ -121,9 +135,8 @@ export class TextSampler {
       return result;
     };
 
-    // Always place edges before interior so that LOD subsampling (which takes
-    // a uniformly-spaced slice of homePositions) naturally retains more edges
-    // as particle count decreases.
+    // Edges-first so LOD subsampling (every-Nth slice of homePositions)
+    // retains more edge particles as count decreases.
     const ordered = [...edgePoints, ...interiorPoints];
     const totalRaw = ordered.length;
 
