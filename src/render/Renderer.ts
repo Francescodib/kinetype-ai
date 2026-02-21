@@ -41,6 +41,8 @@ export class Renderer {
   private readonly opts: RendererOptions;
   private mask: SegmentationMask | null = null;
   private handGraphics!: Graphics;
+  /** Timestamp of first tick — LOD is suppressed for the first 12s (model warmup). */
+  private startTime = 0;
 
   constructor(opts: RendererOptions) {
     this.opts = opts;
@@ -142,14 +144,18 @@ export class Renderer {
 
   private _tick(ticker: { deltaMS: number }): void {
     const now = performance.now();
+    if (this.startTime === 0) this.startTime = now;
     this.fpsMonitor.tick(now);
 
     const dtSec = ticker.deltaMS / 1000;
     this.opts.onUpdate(dtSec, this.mask, now);
 
-    const action = this.fpsMonitor.lodAction(now);
-    if (action === 'reduce') this.opts.onLodReduce();
-    else if (action === 'restore') this.opts.onLodRestore();
+    // Suppress LOD adjustments for the first 12s to let WASM models warm up.
+    if (now - this.startTime > 12000) {
+      const action = this.fpsMonitor.lodAction(now);
+      if (action === 'reduce') this.opts.onLodReduce();
+      else if (action === 'restore') this.opts.onLodRestore();
+    }
 
     this._syncParticles();
     this._drawParticles(this.opts.particleSystem.activeParticles);

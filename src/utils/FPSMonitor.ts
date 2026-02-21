@@ -8,10 +8,10 @@ export class FPSMonitor {
   // LOD state
   private lowFpsStart = 0;
   private highFpsStart = 0;
-  private readonly lowThreshold = 22;
-  private readonly highThreshold = 45;
-  private readonly lowDuration = 2000;  // ms before reducing particles
-  private readonly highDuration = 5000; // ms before restoring particles
+  private readonly lowThreshold = 15;   // only reduce below 15fps
+  private readonly highThreshold = 50;
+  private readonly lowDuration = 5000;  // must sustain low FPS for 5s before reducing
+  private readonly highDuration = 8000; // ms before restoring particles
 
   constructor(sampleCount = 60) {
     this.sampleCount = sampleCount;

@@ -95,7 +95,7 @@ export class ParticleSystem {
   }
 
   reduceLOD(): void {
-    this.targetCount = Math.max(2000, Math.floor(this.targetCount * 0.75));
+    this.targetCount = Math.max(3000, Math.floor(this.targetCount * 0.9));
     if (this.particles.length > this.targetCount) {
       this.particles.length = this.targetCount;
     }
