@@ -253,11 +253,18 @@ async function main(): Promise<void> {
       particleSystem.updateAll(dt, currentMask, motionIntensity, cW, cH);
 
       // ── Stats ──────────────────────────────────────────────────────────────
+      // Count particles outside canvas bounds to diagnose disappearing issue.
+      let outOfBounds = 0;
+      for (const p of particleSystem.activeParticles) {
+        if (p.y < -10 || p.y > cH + 10 || p.x < -10 || p.x > cW + 10) outOfBounds++;
+      }
+
       stats.update({
         aiFps: cameraLive ? segmenter.fps : 0,
         maskDensity,
         motionIntensity,
         particleCount: particleSystem.count,
+        outOfBounds,
         mode: config.mode,
         renderFps: renderer.fps,
       });
@@ -270,11 +277,13 @@ async function main(): Promise<void> {
 
   // ── Text cycler ───────────────────────────────────────────────────────────
 
-  const PHRASES = ['KINETYPE', 'MOVE ME', 'HELLO', 'TOUCH ME', 'PLAY'];
+  // Single fixed phrase for testing; Space key still advances (loops back to same text).
+  // Text can be changed at runtime via kta:text-change from SettingsPanel.
+  const PHRASES = ['KINETYPE'];
 
   const textCycler = new TextCycler({
     phrases: PHRASES,
-    intervalMs: 8000,
+    intervalMs: Number.MAX_SAFE_INTEGER, // disable auto-cycle; Space key still works
     canvasWidth: renderer.canvasWidth,
     canvasHeight: renderer.canvasHeight,
     maxParticles: config.particleCount,
@@ -381,6 +390,11 @@ async function main(): Promise<void> {
     if (d.repulsionForce !== undefined) config.repulsionForce = d.repulsionForce;
     if (d.mode !== undefined) config.mode = d.mode;
     // particleCount changes require re-init (handled gracefully by LOD)
+  });
+
+  // Text change from Settings → update TextCycler + transition particles
+  document.addEventListener('kta:text-change', e => {
+    textCycler.setPhrase(e.detail.text);
   });
 
   // ── Mouse / touch tracking ────────────────────────────────────────────────

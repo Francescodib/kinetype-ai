@@ -4,6 +4,7 @@ export interface StatsData {
   maskDensity: number;    // 0–1: fraction of screen covered by silhouette
   motionIntensity: number; // 0–1
   particleCount?: number;
+  outOfBounds?: number;   // particles currently outside canvas bounds
   mode?: string;
 }
 
@@ -89,9 +90,12 @@ export class StatsOverlay {
     const line4 = this.el.querySelector('#st-line4') as HTMLElement;
 
     line1.textContent = `AI FPS  ${String(data.aiFps).padStart(3)}${rFps}`;
-    line2.textContent = data.particleCount !== undefined
-      ? `Particles ${data.particleCount}`
-      : '';
+    if (data.particleCount !== undefined) {
+      const oob = data.outOfBounds ?? 0;
+      line2.textContent = `Particles ${data.particleCount}   OOB ${oob}`;
+    } else {
+      line2.textContent = '';
+    }
 
     const motionPct = (data.motionIntensity * 100).toFixed(0);
     motionLabel.textContent = `Motion  ${String(motionPct).padStart(3)}%`;

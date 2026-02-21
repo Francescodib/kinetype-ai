@@ -7,9 +7,14 @@ export interface SettingsChangeEvent {
   mode?: InteractionMode;
 }
 
+export interface TextChangeEvent {
+  text: string;
+}
+
 declare global {
   interface DocumentEventMap {
     'kta:settings-change': CustomEvent<SettingsChangeEvent>;
+    'kta:text-change': CustomEvent<TextChangeEvent>;
   }
 }
 
@@ -56,6 +61,7 @@ export class SettingsPanel {
     this.body = document.createElement('div');
     this.body.style.cssText = 'padding:10px 14px;display:none;';
 
+    this._addTextInput(this.body, 'KINETYPE');
     this._addSlider(this.body, 'Particles', config.particleCount, 500, 10000, 500, v => {
       emitChange({ particleCount: v });
     });
@@ -74,6 +80,67 @@ export class SettingsPanel {
     this.body.style.display = this.collapsed ? 'none' : 'block';
     const header = this.el.firstElementChild as HTMLElement;
     header.textContent = this.collapsed ? 'SETTINGS  ▸' : 'SETTINGS  ▾';
+  }
+
+  private _addTextInput(parent: HTMLElement, initialText: string): void {
+    const row = document.createElement('div');
+    row.style.cssText = 'margin-bottom:10px;';
+
+    const lbl = document.createElement('div');
+    lbl.textContent = 'Text';
+    lbl.style.marginBottom = '4px';
+
+    const inputRow = document.createElement('div');
+    inputRow.style.cssText = 'display:flex;gap:6px;';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = initialText;
+    input.maxLength = 20;
+    Object.assign(input.style, {
+      flex: '1',
+      background: '#111',
+      color: '#39ff14',
+      border: '1px solid rgba(57,255,20,0.4)',
+      borderRadius: '3px',
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      padding: '3px 6px',
+      outline: 'none',
+      textTransform: 'uppercase',
+    });
+    input.addEventListener('input', () => {
+      input.value = input.value.toUpperCase();
+    });
+
+    const btn = document.createElement('button');
+    btn.textContent = 'Apply';
+    Object.assign(btn.style, {
+      background: 'transparent',
+      color: '#39ff14',
+      border: '1px solid rgba(57,255,20,0.4)',
+      borderRadius: '3px',
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      padding: '3px 8px',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap',
+    });
+
+    const apply = (): void => {
+      const text = input.value.trim().toUpperCase();
+      if (!text) return;
+      document.dispatchEvent(new CustomEvent('kta:text-change', { detail: { text } }));
+    };
+
+    btn.addEventListener('click', apply);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') apply(); });
+
+    inputRow.appendChild(input);
+    inputRow.appendChild(btn);
+    row.appendChild(lbl);
+    row.appendChild(inputRow);
+    parent.appendChild(row);
   }
 
   private _addSlider(

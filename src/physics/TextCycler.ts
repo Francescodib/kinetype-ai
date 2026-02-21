@@ -64,6 +64,17 @@ export class TextCycler {
     this.canvasHeight = canvasHeight;
   }
 
+  /**
+   * Replace all phrases with a single custom one and immediately emit
+   * the cycle callback so particles transition to the new text.
+   */
+  setPhrase(text: string): void {
+    this.phrases.splice(0, this.phrases.length, text.trim() || 'KINETYPE');
+    this.idx = 0;
+    this.lastCycleTime = performance.now();
+    this._emit();
+  }
+
   /** Sample home positions for the current phrase. */
   sampleCurrent(): SamplePoint[] {
     return this.sampler.sample({
