@@ -23,6 +23,14 @@ export type SegmentationMask = {
 
 export type InteractionMode = 'repulse' | 'attract' | 'vortex' | 'freeze';
 
+/** A point in canvas space that exerts force on nearby particles. */
+export interface ForcePoint {
+  x: number;
+  y: number;
+  radius: number;   // influence radius in canvas pixels
+  strength: number; // force magnitude multiplier
+}
+
 export interface SimConfig {
   particleCount: number;
   repulsionForce: number;

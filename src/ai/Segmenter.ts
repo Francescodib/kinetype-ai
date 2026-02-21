@@ -18,7 +18,7 @@ export class Segmenter {
   private _frameCount = 0;
   private _lastFpsTime = 0;
   private _lastInferenceTime = 0;
-  private readonly minIntervalMs = 1000 / 30; // cap at 30fps
+  private readonly minIntervalMs = 1000 / 15; // cap at 15fps to free main thread
 
   async load(): Promise<void> {
     const vision = await FilesetResolver.forVisionTasks(WASM_PATH);

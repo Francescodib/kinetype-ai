@@ -13,6 +13,14 @@ import type { Particle } from '../physics/Particle.js';
 import type { ParticleSystem } from '../physics/ParticleSystem.js';
 import type { SegmentationMask } from '../types/index.js';
 
+/** Pre-converted canvas-space data for one hand. */
+export interface HandDrawData {
+  /** Canvas-space positions of all 21 landmarks. */
+  landmarks: Array<{ x: number; y: number }>;
+  connections: [number, number][];
+  fingertipIndices: readonly number[];
+}
+
 export interface RendererOptions {
   particleSystem: ParticleSystem;
   onUpdate: (dt: number, mask: SegmentationMask | null, now: number) => void;
@@ -32,6 +40,7 @@ export class Renderer {
   private readonly fpsMonitor = new FPSMonitor(60);
   private readonly opts: RendererOptions;
   private mask: SegmentationMask | null = null;
+  private handGraphics!: Graphics;
 
   constructor(opts: RendererOptions) {
     this.opts = opts;
@@ -51,7 +60,7 @@ export class Renderer {
     (this.app.canvas as HTMLCanvasElement).style.cssText =
       'position:fixed;top:0;left:0;width:100%;height:100%;z-index:2;';
 
-    this.circleTexture = this._makeCircleTexture(3);
+    this.circleTexture = this._makeCircleTexture(4);
 
     // Glow layer: blurred Container with Sprites, drawn under main particles
     this.glowContainer = new Container();
@@ -72,6 +81,10 @@ export class Renderer {
       },
     });
     this.app.stage.addChild(this.particleContainer);
+
+    // Hand skeleton overlay — drawn on top of everything
+    this.handGraphics = new Graphics();
+    this.app.stage.addChild(this.handGraphics);
 
     this._syncParticles();
     this.app.ticker.add(this._tick.bind(this));
@@ -156,6 +169,41 @@ export class Renderer {
       gs.x = p.x;
       gs.y = p.y;
       gs.tint = color;
+    }
+  }
+
+  /**
+   * Draw hand skeletons over the particle layer.
+   * Call this each frame from onUpdate with canvas-space landmark data.
+   */
+  renderHands(hands: HandDrawData[]): void {
+    const g = this.handGraphics;
+    g.clear();
+
+    for (const hand of hands) {
+      const lms = hand.landmarks;
+
+      // Skeleton lines
+      for (const [a, b] of hand.connections) {
+        const la = lms[a];
+        const lb = lms[b];
+        if (!la || !lb) continue;
+        g.moveTo(la.x, la.y).lineTo(lb.x, lb.y);
+      }
+      g.stroke({ color: 0x39ff14, width: 2, alpha: 0.85 });
+
+      // Regular joints (white dots)
+      for (let i = 0; i < lms.length; i++) {
+        if ((hand.fingertipIndices as readonly number[]).includes(i)) continue;
+        g.circle(lms[i].x, lms[i].y, 4);
+      }
+      g.fill({ color: 0xffffff, alpha: 0.75 });
+
+      // Fingertip dots (larger, accent color)
+      for (const ti of hand.fingertipIndices) {
+        g.circle(lms[ti].x, lms[ti].y, 8);
+      }
+      g.fill({ color: 0xff4455, alpha: 1.0 });
     }
   }
 

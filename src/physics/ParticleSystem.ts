@@ -1,7 +1,7 @@
 import { Particle } from './Particle.js';
 import { TextSampler } from './TextSampler.js';
 import type { SamplePoint } from './TextSampler.js';
-import type { Vec2, SegmentationMask, SimConfig } from '../types/index.js';
+import type { Vec2, SegmentationMask, SimConfig, ForcePoint } from '../types/index.js';
 
 /** Canvas-space AABB of the last known silhouette. */
 interface SilhouetteBBox {
@@ -22,7 +22,8 @@ export class ParticleSystem {
   config: SimConfig;
 
   private mousePos: Vec2 | null = null;
-  private readonly mouseRadius = 80;
+  private readonly mouseRadius = 120;
+  private forcePoints: ForcePoint[] = [];
 
   constructor(config: SimConfig) {
     this.config = config;
@@ -88,8 +89,13 @@ export class ParticleSystem {
     this.mousePos = pos;
   }
 
+  /** Set the current hand-landmark-derived force points (updated each frame). */
+  setForcePoints(points: ForcePoint[]): void {
+    this.forcePoints = points;
+  }
+
   reduceLOD(): void {
-    this.targetCount = Math.max(500, Math.floor(this.targetCount * 0.75));
+    this.targetCount = Math.max(2000, Math.floor(this.targetCount * 0.75));
     if (this.particles.length > this.targetCount) {
       this.particles.length = this.targetCount;
     }
@@ -111,14 +117,6 @@ export class ParticleSystem {
     void canvasHeight;
   }
 
-  /**
-   * Update all particles for one frame.
-   * @param dt               Delta-time in seconds (from Pixi ticker)
-   * @param mask             Latest segmentation mask (null = no camera)
-   * @param motionIntensity  0–1 from MotionAnalyzer
-   * @param canvasWidth      Pixi canvas width in CSS pixels
-   * @param canvasHeight     Pixi canvas height in CSS pixels
-   */
   updateAll(
     dt: number,
     mask: SegmentationMask | null,
@@ -129,12 +127,10 @@ export class ParticleSystem {
     const { friction, ease, repulsionForce, mode } = this.config;
     const dtCapped = Math.min(dt, 0.05);
 
-    // Recompute silhouette bounding box once per frame
     if (mask) {
       this.lastBBox = this._computeBBox(mask, canvasWidth, canvasHeight);
     }
 
-    // Body center from bbox (used by repulse/attract/vortex)
     const bodyX = this.lastBBox
       ? (this.lastBBox.minX + this.lastBBox.maxX) / 2
       : canvasWidth / 2;
@@ -146,7 +142,47 @@ export class ParticleSystem {
       let fx = 0;
       let fy = 0;
 
-      // ── Mouse repulsion ─────────────────────────────────────────────────
+      // ── Hand landmark force points (primary interaction) ─────────────────
+      for (const fp of this.forcePoints) {
+        const dx = p.x - fp.x;
+        const dy = p.y - fp.y;
+        const dist2 = dx * dx + dy * dy;
+        const r2 = fp.radius * fp.radius;
+
+        if (dist2 < r2 && dist2 > 0.1) {
+          const dist = Math.sqrt(dist2);
+          const falloff = 1 - dist / fp.radius; // stronger at center
+          const scale = fp.strength * falloff;
+
+          switch (mode) {
+            case 'repulse': {
+              fx += (dx / dist) * scale;
+              fy += (dy / dist) * scale;
+              break;
+            }
+            case 'attract': {
+              fx -= (dx / dist) * scale * 0.7;
+              fy -= (dy / dist) * scale * 0.7;
+              break;
+            }
+            case 'vortex': {
+              fx += (-dy / dist) * scale;
+              fy += (dx / dist) * scale;
+              break;
+            }
+            case 'freeze': {
+              p.vx *= 0.6;
+              p.vy *= 0.6;
+              p.frozen = true;
+              break;
+            }
+          }
+        } else if (p.frozen && this.forcePoints.length > 0) {
+          p.frozen = false;
+        }
+      }
+
+      // ── Mouse / touch fallback ────────────────────────────────────────────
       if (this.mousePos) {
         const mdx = p.x - this.mousePos.x;
         const mdy = p.y - this.mousePos.y;
@@ -154,15 +190,14 @@ export class ParticleSystem {
         const mr2 = this.mouseRadius * this.mouseRadius;
         if (mdist2 < mr2 && mdist2 > 0) {
           const mdist = Math.sqrt(mdist2);
-          const strength = (1 - mdist / this.mouseRadius) * repulsionForce * 2;
+          const strength = (1 - mdist / this.mouseRadius) * repulsionForce * 3;
           fx += (mdx / mdist) * strength;
           fy += (mdy / mdist) * strength;
         }
       }
 
-      // ── Body segmentation interaction ────────────────────────────────────
+      // ── Body mask (ambient background effect) ────────────────────────────
       if (mask && motionIntensity > 0.01) {
-        // Bounding-box early rejection: 40px margin around silhouette
         const inBBox =
           !this.lastBBox ||
           (p.x >= this.lastBBox.minX - 40 &&
@@ -171,16 +206,15 @@ export class ParticleSystem {
             p.y <= this.lastBBox.maxY + 40);
 
         if (inBBox) {
-          // Scale canvas coords → mask coords
-          const mx = Math.floor((p.x / canvasWidth) * mask.width);
+          // Flip X to compensate for CSS mirror transform on video element
+          const mx = Math.floor(((canvasWidth - p.x) / canvasWidth) * mask.width);
           const my = Math.floor((p.y / canvasHeight) * mask.height);
 
           if (mx >= 0 && mx < mask.width && my >= 0 && my < mask.height) {
             const isPerson = mask.data[my * mask.width + mx] > 0;
 
             if (isPerson) {
-              const scale = repulsionForce * motionIntensity;
-              // Radial direction from body center to particle
+              const scale = repulsionForce * motionIntensity * 0.5;
               const dx = p.x - bodyX;
               const dy = p.y - bodyY;
               const dist = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -192,32 +226,28 @@ export class ParticleSystem {
                   break;
                 }
                 case 'attract': {
-                  // Pull inward toward body center
                   fx -= (dx / dist) * scale * 0.6;
                   fy -= (dy / dist) * scale * 0.6;
                   break;
                 }
                 case 'vortex': {
-                  // Tangential (perpendicular) → orbital motion
                   fx += (-dy / dist) * scale;
                   fy += (dx / dist) * scale;
                   break;
                 }
                 case 'freeze': {
-                  p.vx *= 0.75;
-                  p.vy *= 0.75;
+                  p.vx *= 0.8;
+                  p.vy *= 0.8;
                   p.frozen = true;
                   break;
                 }
               }
-            } else {
-              // Particle outside body → unfreeze
-              if (p.frozen) p.frozen = false;
+            } else if (p.frozen && this.forcePoints.length === 0) {
+              p.frozen = false;
             }
           }
         }
-      } else {
-        // No mask / zero motion → thaw
+      } else if (!mask && this.forcePoints.length === 0) {
         if (p.frozen) p.frozen = false;
       }
 
@@ -225,7 +255,6 @@ export class ParticleSystem {
     }
   }
 
-  /** Compute silhouette AABB in canvas-space, scanning the full mask. */
   private _computeBBox(
     mask: SegmentationMask,
     canvasWidth: number,

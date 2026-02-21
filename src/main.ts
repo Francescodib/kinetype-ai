@@ -1,5 +1,6 @@
 import { Camera } from './camera/Camera.js';
 import { Segmenter } from './ai/Segmenter.js';
+import { HandTracker, FINGERTIP_INDICES, HAND_CONNECTIONS } from './ai/HandTracker.js';
 import { StatsOverlay } from './ui/StatsOverlay.js';
 import { DemoMode } from './ui/DemoMode.js';
 import { SettingsPanel } from './ui/SettingsPanel.js';
@@ -8,7 +9,7 @@ import { ParticleSystem } from './physics/ParticleSystem.js';
 import { TextCycler } from './physics/TextCycler.js';
 import { Renderer } from './render/Renderer.js';
 import { MotionAnalyzer } from './utils/MotionAnalyzer.js';
-import type { SegmentationMask, InteractionMode, SimConfig } from './types/index.js';
+import type { SegmentationMask, InteractionMode, SimConfig, ForcePoint } from './types/index.js';
 
 // ── iOS warning ───────────────────────────────────────────────────────────────
 
@@ -140,12 +141,19 @@ async function main(): Promise<void> {
 
   const loading = buildLoadingScreen();
 
-  // ── Load AI model ──────────────────────────────────────────────────────────
+  // ── Load AI models (segmentation + hand tracking in parallel) ─────────────
 
   const segmenter = new Segmenter();
+  const handTracker = new HandTracker();
   try {
     loading.bar.style.width = '20%';
-    await segmenter.load();
+    await Promise.all([
+      segmenter.load(),
+      handTracker.load().catch(err => {
+        // Hand tracking is optional — log and continue without it
+        console.warn('HandTracker failed to load, continuing without it:', err);
+      }),
+    ]);
     loading.bar.style.width = '65%';
   } catch (err) {
     console.error('Failed to load segmentation model:', err);
@@ -160,8 +168,8 @@ async function main(): Promise<void> {
   // ── Simulation config ─────────────────────────────────────────────────────
 
   const config: SimConfig = {
-    particleCount: 6000,
-    repulsionForce: 3.5,
+    particleCount: 4000,
+    repulsionForce: 8,
     friction: 0.88,
     ease: 0.06,
     mode: 'repulse',
@@ -183,29 +191,68 @@ async function main(): Promise<void> {
   const renderer = new Renderer({
     particleSystem,
     onUpdate: (dt, _mask, now) => {
-      // AI segmentation (only when camera is live)
+      const cW = renderer.canvasWidth;
+      const cH = renderer.canvasHeight;
+
+      // ── AI segmentation + hand tracking (only when camera is live) ─────────
       if (cameraLive) {
-        segmenter.segmentFrame(camera.videoElement);
-        const seg = segmenter.lastMask;
-        if (seg) {
-          currentMask = seg;
-          const result = motionAnalyzer.analyze(seg);
-          motionIntensity = result.motionIntensity;
-          let person = 0;
-          for (let i = 0; i < seg.data.length; i++) {
-            if (seg.data[i] > 0) person++;
+        // Hand tracking runs first; if hands are in frame, skip body segmentation
+        // this frame to halve the synchronous WASM inference load.
+        handTracker.detect(camera.videoElement);
+        const hands = handTracker.hands;
+
+        if (hands.length === 0) {
+          // No hands → run body segmentation for full-body ambient interaction
+          segmenter.segmentFrame(camera.videoElement);
+          const seg = segmenter.lastMask;
+          if (seg) {
+            currentMask = seg;
+            const result = motionAnalyzer.analyze(seg);
+            motionIntensity = result.motionIntensity;
+            let person = 0;
+            for (let i = 0; i < seg.data.length; i++) {
+              if (seg.data[i] > 0) person++;
+            }
+            maskDensity = person / seg.data.length;
           }
-          maskDensity = person / seg.data.length;
+        } else {
+          // Hands present → clear body mask (hand forces take over)
+          currentMask = null;
+          motionIntensity = 0;
+          maskDensity = 0;
         }
+
+        const forcePoints: ForcePoint[] = [];
+
+        const handDrawData = hands.map(hand => {
+          const landmarks = hand.landmarks.map(lm => handTracker.toCanvas(lm, cW, cH));
+
+          // Fingertips: strong focused force
+          for (const ti of FINGERTIP_INDICES) {
+            const lm = landmarks[ti];
+            if (lm) forcePoints.push({ x: lm.x, y: lm.y, radius: 100, strength: 22 });
+          }
+          // Palm center (landmark 9 — base of middle finger): broader softer force
+          const palm = landmarks[9];
+          if (palm) forcePoints.push({ x: palm.x, y: palm.y, radius: 160, strength: 10 });
+
+          return { landmarks, connections: HAND_CONNECTIONS, fingertipIndices: FINGERTIP_INDICES };
+        });
+
+        particleSystem.setForcePoints(forcePoints);
+        renderer.renderHands(handDrawData);
+      } else {
+        // No camera: clear any stale hand visuals
+        renderer.renderHands([]);
       }
 
-      // Text cycling
+      // ── Text cycling ───────────────────────────────────────────────────────
       textCycler.tick(now);
 
-      // Physics
-      particleSystem.updateAll(dt, currentMask, motionIntensity, renderer.canvasWidth, renderer.canvasHeight);
+      // ── Physics ────────────────────────────────────────────────────────────
+      particleSystem.updateAll(dt, currentMask, motionIntensity, cW, cH);
 
-      // Stats
+      // ── Stats ──────────────────────────────────────────────────────────────
       stats.update({
         aiFps: cameraLive ? segmenter.fps : 0,
         maskDensity,
@@ -258,6 +305,7 @@ async function main(): Promise<void> {
       currentMask = null;
       motionAnalyzer.reset();
       segmenter.start();
+      handTracker.start();
     } catch {
       // Permission denied or no camera → stay in mouse-only / demo mode
       console.warn('Camera unavailable, staying in demo/mouse mode.');
@@ -329,10 +377,15 @@ async function main(): Promise<void> {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       segmenter.stop();
+      handTracker.stop();
       demoMode.stop();
     } else {
-      if (cameraLive) segmenter.start();
-      else demoMode.start();
+      if (cameraLive) {
+        segmenter.start();
+        handTracker.start();
+      } else {
+        demoMode.start();
+      }
     }
   });
 }

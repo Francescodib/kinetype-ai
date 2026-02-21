@@ -8,8 +8,8 @@ export class FPSMonitor {
   // LOD state
   private lowFpsStart = 0;
   private highFpsStart = 0;
-  private readonly lowThreshold = 30;
-  private readonly highThreshold = 55;
+  private readonly lowThreshold = 22;
+  private readonly highThreshold = 45;
   private readonly lowDuration = 2000;  // ms before reducing particles
   private readonly highDuration = 5000; // ms before restoring particles
 
