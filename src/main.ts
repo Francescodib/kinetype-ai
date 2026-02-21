@@ -225,7 +225,7 @@ async function main(): Promise<void> {
   // ── Simulation config ─────────────────────────────────────────────────────
 
   const config: SimConfig = {
-    particleCount: 4000,
+    particleCount: handTracker.gpuDelegate ? 3000 : 800,
     repulsionForce: 12,
     friction: 0.92,
     ease: 0.06,
@@ -400,6 +400,10 @@ async function main(): Promise<void> {
     const d = e.detail;
     if (d.repulsionForce !== undefined) config.repulsionForce = d.repulsionForce;
     if (d.mode !== undefined) setMode(d.mode);
+    if (d.particleCount !== undefined) {
+      config.particleCount = d.particleCount;
+      particleSystem.setParticleCount(d.particleCount);
+    }
   });
 
   document.addEventListener('kta:text-change', e => {
@@ -420,10 +424,17 @@ async function main(): Promise<void> {
   window.addEventListener('touchend', () => particleSystem.setMousePos(null));
 
   // ── Resize ────────────────────────────────────────────────────────────────
+  // Debounced: Pixi uses a ResizeObserver internally and may not have updated
+  // app.screen dimensions by the time the window 'resize' event fires.
+  // A short delay ensures renderer.canvasWidth/Height reflect the new size.
 
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   window.addEventListener('resize', () => {
-    textCycler.resize(renderer.canvasWidth, renderer.canvasHeight);
-    particleSystem.init(textCycler.currentPhrase(), renderer.canvasWidth, renderer.canvasHeight);
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      textCycler.resize(renderer.canvasWidth, renderer.canvasHeight);
+      particleSystem.init(textCycler.currentPhrase(), renderer.canvasWidth, renderer.canvasHeight);
+    }, 120);
   });
 
   // ── Page Visibility API ───────────────────────────────────────────────────

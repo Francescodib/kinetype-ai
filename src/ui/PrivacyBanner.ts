@@ -12,9 +12,11 @@ export class PrivacyBanner {
   private _build(): void {
     const el = document.createElement('div');
     el.id = 'privacy-banner';
+    // On mobile, lift above the mode bar (≈ 70px tall) so they don't overlap.
+    const bottomOffset = window.innerWidth <= 640 ? '80px' : '12px';
     Object.assign(el.style, {
       position: 'fixed',
-      bottom: '12px',
+      bottom: bottomOffset,
       right: '12px',
       background: 'rgba(0,0,0,0.80)',
       color: 'rgba(255,255,255,0.75)',

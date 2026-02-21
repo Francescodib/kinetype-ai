@@ -38,6 +38,7 @@ export class HandTracker {
   private _isRunning = false;
   private _lastTime = 0;
   private readonly minIntervalMs = 1000 / 20; // cap at 20fps for responsive hand tracking
+  private _gpuDelegate = false;
 
   /**
    * Per-hand palm speed in normalized units/second, updated on each detection.
@@ -62,11 +63,13 @@ export class HandTracker {
         baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
         ...opts,
       });
+      this._gpuDelegate = true;
     } catch {
       this.landmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
         ...opts,
       });
+      this._gpuDelegate = false;
     }
   }
 
@@ -128,6 +131,11 @@ export class HandTracker {
    */
   get palmSpeeds(): number[] {
     return this._palmSpeeds;
+  }
+
+  /** True if the model loaded with the GPU (WebGL) delegate; false = CPU fallback. */
+  get gpuDelegate(): boolean {
+    return this._gpuDelegate;
   }
 
   start(): void {

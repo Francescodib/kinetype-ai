@@ -14,7 +14,8 @@ const CHART_H = 64;
 
 export class StatsOverlay {
   private readonly el: HTMLElement;
-  private visible = true;
+  // Hidden by default on narrow screens (mobile) to avoid overlapping the settings panel.
+  private visible = window.innerWidth > 640;
 
   // Sparkline state
   private readonly chartCanvas: HTMLCanvasElement;
@@ -75,6 +76,7 @@ export class StatsOverlay {
     this.el.appendChild(legend);
 
     document.body.appendChild(this.el);
+    if (!this.visible) this.el.style.display = 'none';
 
     window.addEventListener('keydown', e => {
       if (e.key === '`') this.toggle();

@@ -6,7 +6,7 @@ import type { Vec2, SimConfig, ForcePoint } from '../types/index.js';
 export class ParticleSystem {
   private particles: Particle[] = [];
   private targetCount: number;
-  private readonly maxParticles: number;
+  private maxParticles: number;
   private readonly sampler = new TextSampler();
   private homePositions: SamplePoint[] = [];
 
@@ -87,27 +87,56 @@ export class ParticleSystem {
     this.forcePoints = points;
   }
 
+  /** Update the configured maximum and re-initialise particles for the current phrase. */
+  setParticleCount(count: number): void {
+    this.maxParticles = count;
+    this.targetCount = count;
+    this._rebuildParticles(this.homePositions);
+  }
+
   reduceLOD(): void {
-    this.targetCount = Math.max(3000, Math.floor(this.targetCount * 0.9));
-    if (this.particles.length > this.targetCount) {
-      this.particles.length = this.targetCount;
+    const floor = Math.max(Math.floor(this.maxParticles * 0.3), 500);
+    this.targetCount = Math.max(floor, Math.floor(this.targetCount * 0.9));
+    // Redistribute across all home positions (evenly subsampled) rather than
+    // truncating from the end — homePositions is edges-first so lower counts
+    // naturally favour outlines over interior fill.
+    const newHomes = this._subsampleHomes(this.homePositions, this.targetCount);
+    const keep = Math.min(this.particles.length, newHomes.length);
+    for (let i = 0; i < keep; i++) {
+      this.particles[i].homeX = newHomes[i].homeX;
+      this.particles[i].homeY = newHomes[i].homeY;
     }
+    this.particles.length = keep;
   }
 
   restoreLOD(canvasWidth: number, canvasHeight: number): void {
     if (this.targetCount >= this.maxParticles) return;
     this.targetCount = Math.min(this.maxParticles, Math.floor(this.targetCount * 1.33));
-    const homes = this.homePositions.slice(this.particles.length, this.targetCount);
-    for (const home of homes) {
+    const newHomes = this._subsampleHomes(this.homePositions, this.targetCount);
+    // Update home positions of existing particles.
+    for (let i = 0; i < Math.min(this.particles.length, newHomes.length); i++) {
+      this.particles[i].homeX = newHomes[i].homeX;
+      this.particles[i].homeY = newHomes[i].homeY;
+    }
+    // Spawn additional particles for the expanded count.
+    for (let i = this.particles.length; i < newHomes.length; i++) {
       const p = new Particle();
-      p.homeX = home.homeX;
-      p.homeY = home.homeY;
-      p.x = home.homeX + (Math.random() - 0.5) * 60;
-      p.y = home.homeY + (Math.random() - 0.5) * 60;
+      p.homeX = newHomes[i].homeX;
+      p.homeY = newHomes[i].homeY;
+      p.x = newHomes[i].homeX + (Math.random() - 0.5) * 60;
+      p.y = newHomes[i].homeY + (Math.random() - 0.5) * 60;
       this.particles.push(p);
     }
     void canvasWidth;
     void canvasHeight;
+  }
+
+  private _subsampleHomes(homes: SamplePoint[], count: number): SamplePoint[] {
+    if (homes.length <= count) return homes;
+    const step = homes.length / count;
+    const result: SamplePoint[] = [];
+    for (let i = 0; i < count; i++) result.push(homes[Math.floor(i * step)]);
+    return result;
   }
 
   updateAll(dt: number, canvasWidth: number, canvasHeight: number): void {

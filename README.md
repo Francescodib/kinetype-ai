@@ -18,12 +18,6 @@ Interactive kinetic typography — text made of particles that reacts in real-ti
 
 ---
 
-## Screenshot
-
-![KineType — particle text with hand tracking UI](docs/preview-clean.png)
-
----
-
 ## Tech stack
 
 | Layer | Technology |
@@ -110,4 +104,4 @@ All AI inference runs locally in your browser using WebAssembly + WebGL. The web
 
 ## Author
 
-[Francesco Di Biase](https://francescodibiase.com) · 2026
+[Francesco di Biase](https://francescodibiase.com) · 2026
