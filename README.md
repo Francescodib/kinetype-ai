@@ -2,7 +2,7 @@
 
 Interactive kinetic typography where text made of particles reacts in real-time to your body movements, captured via webcam.
 
-**Live demo:** https://francescodib.github.io/kinetype-ai/
+**Live demo:** https://kinetype-ai.vercel.app
 
 ---
 
@@ -21,7 +21,7 @@ Interactive kinetic typography where text made of particles reacts in real-time 
 | Build | Vite 7 |
 | AI / Segmentation | MediaPipe Tasks Vision — selfie segmentation |
 | Rendering | Pixi.js 8 — ParticleContainer, WebGL |
-| Deploy | Vercel (primary) / GitHub Pages |
+| Deploy | Vercel |
 
 ## Running locally
 
@@ -39,8 +39,7 @@ npm run build   # outputs to dist/
 npm run preview # preview production build locally
 ```
 
-Deploys automatically to GitHub Pages on push to `main` via GitHub Actions.
-For Vercel: connect the repo and set `VITE_BASE_PATH=/` (default).
+Deploys automatically on Vercel on every push to `main`.
 
 ## Controls
 
