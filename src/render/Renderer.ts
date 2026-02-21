@@ -11,7 +11,6 @@ import {
 import { FPSMonitor } from '../utils/FPSMonitor.js';
 import type { Particle } from '../physics/Particle.js';
 import type { ParticleSystem } from '../physics/ParticleSystem.js';
-import type { SegmentationMask } from '../types/index.js';
 
 /** Pre-converted canvas-space data for one hand. */
 export interface HandDrawData {
@@ -23,7 +22,7 @@ export interface HandDrawData {
 
 export interface RendererOptions {
   particleSystem: ParticleSystem;
-  onUpdate: (dt: number, mask: SegmentationMask | null, now: number) => void;
+  onUpdate: (dt: number, now: number) => void;
   onLodReduce: () => void;
   onLodRestore: () => void;
 }
@@ -39,7 +38,6 @@ export class Renderer {
   private circleTexture!: Texture;
   private readonly fpsMonitor = new FPSMonitor(60);
   private readonly opts: RendererOptions;
-  private mask: SegmentationMask | null = null;
   private handGraphics!: Graphics;
   /** Timestamp of first tick — LOD is suppressed for the first 12s (model warmup). */
   private startTime = 0;
@@ -126,10 +124,6 @@ export class Renderer {
     }
   }
 
-  setMask(mask: SegmentationMask | null): void {
-    this.mask = mask;
-  }
-
   get fps(): number {
     return Math.round(this.fpsMonitor.fps);
   }
@@ -148,7 +142,7 @@ export class Renderer {
     this.fpsMonitor.tick(now);
 
     const dtSec = ticker.deltaMS / 1000;
-    this.opts.onUpdate(dtSec, this.mask, now);
+    this.opts.onUpdate(dtSec, now);
 
     // Suppress LOD adjustments for the first 12s to let WASM models warm up.
     if (now - this.startTime > 12000) {

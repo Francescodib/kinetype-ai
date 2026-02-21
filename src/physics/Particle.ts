@@ -12,9 +12,6 @@ export class Particle implements ParticleState {
   alpha = 1;
   radius = 1.5;
 
-  /** True while the particle is frozen by freeze-mode body contact. */
-  frozen = false;
-
   /** Blend factor toward hitColor (0 = base color, 1 = hit color). */
   private colorBlend = 0;
 
@@ -22,16 +19,6 @@ export class Particle implements ParticleState {
     // Normalize to 60fps so spring/friction behave consistently at any frame rate.
     // Clamp to 3× to prevent explosion at very low FPS (< 20fps).
     const dtN = Math.min(dt * 60, 3);
-
-    if (this.frozen) {
-      // Frozen: very slow drift back home, no velocity accumulation
-      const dx = this.homeX - this.x;
-      const dy = this.homeY - this.y;
-      this.x += dx * 0.005 * dtN;
-      this.y += dy * 0.005 * dtN;
-      this.colorBlend *= Math.pow(0.98, dtN);
-      return;
-    }
 
     // Apply external force (intentionally not dt-scaled: force is a per-frame impulse)
     this.vx += forceX;
@@ -74,7 +61,6 @@ export class Particle implements ParticleState {
     this.vx = 0;
     this.vy = 0;
     this.colorBlend = 0;
-    this.frozen = false;
     this.alpha = 1;
   }
 }

@@ -26,6 +26,7 @@ export class SettingsPanel {
   private readonly el: HTMLElement;
   private readonly body: HTMLElement;
   private collapsed = true;
+  private modeSelect!: HTMLSelectElement;
 
   constructor(config: SimConfig) {
     // Outer container
@@ -73,6 +74,11 @@ export class SettingsPanel {
     this.el.appendChild(header);
     this.el.appendChild(this.body);
     document.body.appendChild(this.el);
+  }
+
+  /** Sync the mode selector when the mode is changed externally (e.g. bottom bar). */
+  setMode(mode: InteractionMode): void {
+    this.modeSelect.value = mode;
   }
 
   private _toggle(): void {
@@ -196,6 +202,7 @@ export class SettingsPanel {
     lbl.style.marginBottom = '4px';
 
     const sel = document.createElement('select');
+    this.modeSelect = sel;
     Object.assign(sel.style, {
       width: '100%',
       background: '#111',
@@ -208,7 +215,7 @@ export class SettingsPanel {
       cursor: 'pointer',
     });
 
-    const modes: InteractionMode[] = ['repulse', 'attract', 'vortex', 'freeze'];
+    const modes: InteractionMode[] = ['repulse', 'attract', 'vortex'];
     for (const m of modes) {
       const opt = document.createElement('option');
       opt.value = m;

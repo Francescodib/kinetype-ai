@@ -1,18 +1,27 @@
 export interface StatsData {
-  aiFps: number;
-  renderFps?: number;
-  maskDensity: number;    // 0–1: fraction of screen covered by silhouette
-  motionIntensity: number; // 0–1
-  particleCount?: number;
-  outOfBounds?: number;   // particles currently outside canvas bounds
-  mode?: string;
+  renderFps: number;
+  particleCount: number;
+  /** Average particle speed (canvas px/s) — drives the second sparkline. */
+  avgSpeed: number;
+  mode: string;
+  handsTracked: number; // 0, 1, or 2
 }
+
+const INTERVAL_MS = 100;  // sample every 100 ms → snappy response
+const HISTORY = 150;      // 150 × 100 ms = 15 s of scrolling history
+const CHART_W = 196;
+const CHART_H = 64;
 
 export class StatsOverlay {
   private readonly el: HTMLElement;
-  private readonly motionBar: HTMLElement;
-  private readonly maskBar: HTMLElement;
   private visible = true;
+
+  // Sparkline state
+  private readonly chartCanvas: HTMLCanvasElement;
+  private readonly ctx: CanvasRenderingContext2D;
+  private readonly fpsHistory: number[] = [];
+  private readonly speedHistory: number[] = [];
+  private lastSampleTime = 0;
 
   constructor() {
     this.el = document.createElement('div');
@@ -32,45 +41,38 @@ export class StatsOverlay {
       zIndex: '9999',
       userSelect: 'none',
       backdropFilter: 'blur(4px)',
-      minWidth: '200px',
+      minWidth: '210px',
     });
 
-    // Shared bar builder
-    const makeBar = (color: string): { row: HTMLElement; fill: HTMLElement } => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:6px;margin:2px 0;';
-      const track = document.createElement('div');
-      track.style.cssText =
-        'flex:1;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;overflow:hidden;';
-      const fill = document.createElement('div');
-      fill.style.cssText = `height:100%;width:0%;background:${color};border-radius:2px;transition:width 0.1s linear;`;
-      track.appendChild(fill);
-      row.appendChild(track);
-      return { row, fill };
-    };
-
-    // Build inner HTML structure
     this.el.innerHTML = `
-      <div id="st-line1"></div>
-      <div id="st-line2"></div>
-      <div id="st-motion-label"></div>
+      <div id="st-fps"></div>
+      <div id="st-particles"></div>
+      <div id="st-mode"></div>
+      <div id="st-hands"></div>
     `;
 
-    const motionRow = makeBar('#ff6b35');
-    this.el.appendChild(motionRow.row);
-    this.motionBar = motionRow.fill;
+    // ── Sparkline charts ──────────────────────────────────────────────────────
 
-    const line3 = document.createElement('div');
-    line3.id = 'st-line3';
-    this.el.appendChild(line3);
+    const divider = document.createElement('div');
+    divider.style.cssText = 'border-top:1px solid rgba(57,255,20,0.25);margin:8px 0 6px;';
+    this.el.appendChild(divider);
 
-    const maskRow = makeBar('#39ff14');
-    this.el.appendChild(maskRow.row);
-    this.maskBar = maskRow.fill;
+    this.chartCanvas = document.createElement('canvas');
+    this.chartCanvas.width = CHART_W;
+    this.chartCanvas.height = CHART_H;
+    this.chartCanvas.style.cssText = `
+      display:block;width:100%;border-radius:3px;
+      background:rgba(0,0,0,0.3);image-rendering:crisp-edges;
+    `;
+    this.el.appendChild(this.chartCanvas);
+    this.ctx = this.chartCanvas.getContext('2d')!;
 
-    const line4 = document.createElement('div');
-    line4.id = 'st-line4';
-    this.el.appendChild(line4);
+    const legend = document.createElement('div');
+    legend.style.cssText = 'display:flex;justify-content:space-between;margin-top:3px;font-size:10px;opacity:0.65;';
+    legend.innerHTML =
+      '<span style="color:#39ff14">── FPS (0–60)</span>' +
+      '<span style="color:#ff8844">── Speed</span>';
+    this.el.appendChild(legend);
 
     document.body.appendChild(this.el);
 
@@ -82,30 +84,93 @@ export class StatsOverlay {
   update(data: StatsData): void {
     if (!this.visible) return;
 
-    const rFps = data.renderFps !== undefined ? `  R:${data.renderFps}` : '';
-    const line1 = this.el.querySelector('#st-line1') as HTMLElement;
-    const line2 = this.el.querySelector('#st-line2') as HTMLElement;
-    const motionLabel = this.el.querySelector('#st-motion-label') as HTMLElement;
-    const line3 = this.el.querySelector('#st-line3') as HTMLElement;
-    const line4 = this.el.querySelector('#st-line4') as HTMLElement;
+    (this.el.querySelector('#st-fps') as HTMLElement).textContent =
+      `FPS     ${String(data.renderFps).padStart(3)}`;
+    (this.el.querySelector('#st-particles') as HTMLElement).textContent =
+      `Particles ${data.particleCount}`;
+    (this.el.querySelector('#st-mode') as HTMLElement).textContent =
+      `Mode    ${data.mode}`;
+    (this.el.querySelector('#st-hands') as HTMLElement).textContent =
+      data.handsTracked > 0 ? `Hands   ${data.handsTracked}` : `Hands   —`;
 
-    line1.textContent = `AI FPS  ${String(data.aiFps).padStart(3)}${rFps}`;
-    if (data.particleCount !== undefined) {
-      const oob = data.outOfBounds ?? 0;
-      line2.textContent = `Particles ${data.particleCount}   OOB ${oob}`;
-    } else {
-      line2.textContent = '';
+    const now = performance.now();
+    if (now - this.lastSampleTime >= INTERVAL_MS) {
+      this.lastSampleTime = now;
+      this._push(this.fpsHistory, data.renderFps);
+      this._push(this.speedHistory, data.avgSpeed);
+      this._drawCharts();
     }
+  }
 
-    const motionPct = (data.motionIntensity * 100).toFixed(0);
-    motionLabel.textContent = `Motion  ${String(motionPct).padStart(3)}%`;
-    this.motionBar.style.width = `${(data.motionIntensity * 100).toFixed(1)}%`;
+  private _push(arr: number[], val: number): void {
+    arr.push(val);
+    if (arr.length > HISTORY) arr.shift();
+  }
 
-    const coverPct = (data.maskDensity * 100).toFixed(1);
-    line3.textContent = `Cover   ${coverPct}%`;
-    this.maskBar.style.width = `${(data.maskDensity * 100).toFixed(1)}%`;
+  private _drawCharts(): void {
+    const { ctx } = this;
+    const W = CHART_W;
+    const H = CHART_H;
+    const mid = Math.floor(H / 2);
 
-    line4.textContent = data.mode ? `Mode    ${data.mode}` : '';
+    ctx.clearRect(0, 0, W, H);
+
+    // Separator
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    ctx.lineTo(W, mid);
+    ctx.stroke();
+
+    // FPS chart — top half, range 0–60
+    this._sparkline(this.fpsHistory, 0, 0, W, mid - 1, 0, 60, '#39ff14');
+
+    // Speed chart — bottom half, range 0–150 px/s
+    this._sparkline(this.speedHistory, 0, mid + 1, W, mid - 1, 0, 150, '#ff8844');
+  }
+
+  private _sparkline(
+    data: number[],
+    x: number, y: number, w: number, h: number,
+    min: number, max: number,
+    color: string,
+  ): void {
+    if (data.length < 2) return;
+    const ctx = this.ctx;
+    const range = max - min || 1;
+    const n = data.length;
+
+    const px = (i: number): number => x + (i / (HISTORY - 1)) * w;
+    const py = (v: number): number => y + h - ((Math.min(v, max) - min) / range) * h;
+
+    // Filled area
+    ctx.beginPath();
+    ctx.moveTo(px(0), y + h);
+    for (let i = 0; i < n; i++) ctx.lineTo(px(i), py(data[i]));
+    ctx.lineTo(px(n - 1), y + h);
+    ctx.closePath();
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Line
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      if (i === 0) ctx.moveTo(px(0), py(data[0]));
+      else ctx.lineTo(px(i), py(data[i]));
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Dot at latest value
+    ctx.beginPath();
+    ctx.arc(px(n - 1), py(data[n - 1]), 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
   }
 
   toggle(): void {

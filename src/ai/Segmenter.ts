@@ -4,10 +4,12 @@ import {
 } from '@mediapipe/tasks-vision';
 import type { SegmentationMask } from '../types/index.js';
 
+type WasmFileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
+
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
 
-const WASM_PATH =
+export const VISION_WASM_PATH =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
 
 export class Segmenter {
@@ -20,14 +22,27 @@ export class Segmenter {
   private _lastInferenceTime = 0;
   private readonly minIntervalMs = 1000 / 15; // cap at 15fps to free main thread
 
-  async load(): Promise<void> {
-    const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
-    this.segmenter = await ImageSegmenter.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: MODEL_URL },
+  async load(fileset?: WasmFileset): Promise<void> {
+    const vision = fileset ?? await FilesetResolver.forVisionTasks(VISION_WASM_PATH);
+
+    const opts = {
       outputCategoryMask: true,
       outputConfidenceMasks: false,
-      runningMode: 'VIDEO',
-    });
+      runningMode: 'VIDEO' as const,
+    };
+
+    // Try GPU delegate first — falls back to CPU if WebGL is unavailable.
+    try {
+      this.segmenter = await ImageSegmenter.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+        ...opts,
+      });
+    } catch {
+      this.segmenter = await ImageSegmenter.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
+        ...opts,
+      });
+    }
   }
 
   segmentFrame(videoElement: HTMLVideoElement): void {

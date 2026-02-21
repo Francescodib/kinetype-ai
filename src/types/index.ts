@@ -21,7 +21,7 @@ export type SegmentationMask = {
   height: number;
 };
 
-export type InteractionMode = 'repulse' | 'attract' | 'vortex' | 'freeze';
+export type InteractionMode = 'repulse' | 'attract' | 'vortex';
 
 /** A point in canvas space that exerts force on nearby particles. */
 export interface ForcePoint {

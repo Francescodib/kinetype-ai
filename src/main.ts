@@ -1,15 +1,12 @@
 import { Camera } from './camera/Camera.js';
-import { Segmenter } from './ai/Segmenter.js';
 import { HandTracker, FINGERTIP_INDICES, HAND_CONNECTIONS } from './ai/HandTracker.js';
 import { StatsOverlay } from './ui/StatsOverlay.js';
-import { DemoMode } from './ui/DemoMode.js';
 import { SettingsPanel } from './ui/SettingsPanel.js';
 import { PrivacyBanner } from './ui/PrivacyBanner.js';
 import { ParticleSystem } from './physics/ParticleSystem.js';
 import { TextCycler } from './physics/TextCycler.js';
 import { Renderer } from './render/Renderer.js';
-import { MotionAnalyzer } from './utils/MotionAnalyzer.js';
-import type { SegmentationMask, InteractionMode, SimConfig, ForcePoint } from './types/index.js';
+import type { InteractionMode, SimConfig, ForcePoint } from './types/index.js';
 
 // ── iOS warning ───────────────────────────────────────────────────────────────
 
@@ -73,32 +70,51 @@ function buildErrorScreen(message: string): void {
 
 // ── Mode switcher bottom bar ──────────────────────────────────────────────────
 
+/**
+ * Build the mode bar and return a sync function that updates button styles
+ * whenever the active mode changes from an external source (e.g. settings panel).
+ */
 function buildModeBar(
-  config: SimConfig,
+  initialMode: InteractionMode,
   onChange: (mode: InteractionMode) => void
-): void {
-  const panel = document.createElement('div');
-  panel.id = 'mode-panel';
-  Object.assign(panel.style, {
+): (mode: InteractionMode) => void {
+  // Outer column: buttons on top, credits line below
+  const wrapper = document.createElement('div');
+  wrapper.id = 'mode-panel';
+  Object.assign(wrapper.style, {
     position: 'fixed',
-    bottom: '16px',
+    bottom: '12px',
     left: '50%',
     transform: 'translateX(-50%)',
     display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
     gap: '8px',
     zIndex: '9999',
   });
 
-  const modes: InteractionMode[] = ['repulse', 'attract', 'vortex', 'freeze'];
-  const labels = ['1 Repulse', '2 Attract', '3 Vortex', '4 Freeze'];
+  // Mode buttons row
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;';
+
+  const modes: InteractionMode[] = ['repulse', 'attract', 'vortex'];
+  const labels = ['1 Repulse', '2 Attract', '3 Vortex'];
   const buttons: HTMLButtonElement[] = [];
+
+  const syncStyles = (active: InteractionMode): void => {
+    buttons.forEach((b, j) => {
+      const on = modes[j] === active;
+      b.style.background = on ? '#39ff14' : 'rgba(0,0,0,0.6)';
+      b.style.color = on ? '#000' : '#39ff14';
+    });
+  };
 
   modes.forEach((mode, i) => {
     const btn = document.createElement('button');
     btn.textContent = labels[i];
     Object.assign(btn.style, {
-      background: mode === config.mode ? '#39ff14' : 'rgba(0,0,0,0.6)',
-      color: mode === config.mode ? '#000' : '#39ff14',
+      background: mode === initialMode ? '#39ff14' : 'rgba(0,0,0,0.6)',
+      color: mode === initialMode ? '#000' : '#39ff14',
       border: '1px solid #39ff14',
       borderRadius: '4px',
       padding: '6px 14px',
@@ -107,24 +123,72 @@ function buildModeBar(
       cursor: 'pointer',
       transition: 'background 0.15s, color 0.15s',
     });
-    btn.addEventListener('click', () => {
-      onChange(mode);
-      buttons.forEach((b, j) => {
-        const active = modes[j] === mode;
-        b.style.background = active ? '#39ff14' : 'rgba(0,0,0,0.6)';
-        b.style.color = active ? '#000' : '#39ff14';
-      });
-    });
+    btn.addEventListener('click', () => onChange(mode));
     buttons.push(btn);
-    panel.appendChild(btn);
+    btnRow.appendChild(btn);
   });
 
-  document.body.appendChild(panel);
+  // Credits line
+  const credits = document.createElement('div');
+  Object.assign(credits.style, {
+    fontFamily: 'monospace',
+    fontSize: '10px',
+    color: '#e0ffe0',
+    opacity: '0.55',
+    whiteSpace: 'nowrap',
+    transition: 'opacity 0.2s',
+  });
+  credits.innerHTML =
+    `<a href="https://francescodibiase.com" target="_blank" rel="noopener noreferrer"` +
+    ` style="color:#e0ffe0;text-decoration:none;"` +
+    ` onmouseover="this.parentElement.style.opacity='0.85'"` +
+    ` onmouseout="this.parentElement.style.opacity='0.55'"` +
+    `>FrancescodiBiase.com</a>&ensp;&middot;&ensp;2026`;
+
+  wrapper.appendChild(btnRow);
+  wrapper.appendChild(credits);
+  document.body.appendChild(wrapper);
 
   window.addEventListener('keydown', e => {
-    const idx = ['1', '2', '3', '4'].indexOf(e.key);
-    if (idx >= 0) buttons[idx]?.click();
+    const idx = ['1', '2', '3'].indexOf(e.key);
+    if (idx >= 0) {
+      const m = modes[idx];
+      if (m) onChange(m);
+    }
   });
+
+  return syncStyles;
+}
+
+// ── Centered hint overlay (shown when camera is live but no hands detected) ───
+
+function buildHintOverlay(): HTMLElement {
+  const el = document.createElement('div');
+  Object.assign(el.style, {
+    position: 'fixed',
+    top: '22%',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: 'rgba(0,0,0,0.70)',
+    backdropFilter: 'blur(4px)',
+    color: '#ff8800',
+    fontFamily: 'monospace',
+    fontSize: '13px',
+    lineHeight: '1.9',
+    letterSpacing: '0.05em',
+    textAlign: 'center',
+    padding: '12px 22px',
+    borderRadius: '6px',
+    zIndex: '9998',
+    pointerEvents: 'none',
+    userSelect: 'none',
+    opacity: '0',
+    transition: 'opacity 0.8s ease',
+  });
+  el.innerHTML =
+    'Show your hands in front of the camera<br>to sculpt the text in real time.';
+  document.body.appendChild(el);
+  return el;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -141,36 +205,29 @@ async function main(): Promise<void> {
 
   const loading = buildLoadingScreen();
 
-  // ── Load AI models (segmentation + hand tracking in parallel) ─────────────
+  // ── Load hand tracking model ───────────────────────────────────────────────
 
-  const segmenter = new Segmenter();
   const handTracker = new HandTracker();
   try {
-    loading.bar.style.width = '20%';
-    await Promise.all([
-      segmenter.load(),
-      handTracker.load().catch(err => {
-        // Hand tracking is optional — log and continue without it
-        console.warn('HandTracker failed to load, continuing without it:', err);
-      }),
-    ]);
-    loading.bar.style.width = '65%';
+    loading.bar.style.width = '30%';
+    await handTracker.load();
+    loading.bar.style.width = '80%';
   } catch (err) {
-    console.error('Failed to load segmentation model:', err);
+    console.error('Failed to load hand tracking model:', err);
     loading.el.remove();
     buildErrorScreen('Failed to load AI model. Check your internet connection and refresh.');
     return;
   }
 
   loading.msg.textContent = 'Initialising\u2026';
-  loading.bar.style.width = '85%';
+  loading.bar.style.width = '95%';
 
   // ── Simulation config ─────────────────────────────────────────────────────
 
   const config: SimConfig = {
     particleCount: 4000,
-    repulsionForce: 8,
-    friction: 0.88,
+    repulsionForce: 12,
+    friction: 0.92,
     ease: 0.06,
     mode: 'repulse',
   };
@@ -178,63 +235,51 @@ async function main(): Promise<void> {
   // ── Core systems ──────────────────────────────────────────────────────────
 
   const particleSystem = new ParticleSystem(config);
-  const motionAnalyzer = new MotionAnalyzer();
   const stats = new StatsOverlay();
-
-  let motionIntensity = 0;
-  let maskDensity = 0;
-  let currentMask: SegmentationMask | null = null;
   let cameraLive = false;
+
+  // Built early so the onUpdate closure can reference it before renderer.init().
+  const hintEl = buildHintOverlay();
 
   // ── Renderer ──────────────────────────────────────────────────────────────
 
   const renderer = new Renderer({
     particleSystem,
-    onUpdate: (dt, _mask, now) => {
+    onUpdate: (dt, now) => {
       const cW = renderer.canvasWidth;
       const cH = renderer.canvasHeight;
 
-      // ── AI segmentation + hand tracking (only when camera is live) ─────────
+      // ── Hand tracking ──────────────────────────────────────────────────────
       if (cameraLive) {
-        // Hand tracking runs first; if hands are in frame, skip body segmentation
-        // this frame to halve the synchronous WASM inference load.
         handTracker.detect(camera.videoElement);
-        const hands = handTracker.hands;
+      }
+      const hands = cameraLive ? handTracker.hands : [];
 
-        if (hands.length === 0) {
-          // No hands → run body segmentation for full-body ambient interaction
-          segmenter.segmentFrame(camera.videoElement);
-          const seg = segmenter.lastMask;
-          if (seg) {
-            currentMask = seg;
-            const result = motionAnalyzer.analyze(seg);
-            motionIntensity = result.motionIntensity;
-            let person = 0;
-            for (let i = 0; i < seg.data.length; i++) {
-              if (seg.data[i] > 0) person++;
-            }
-            maskDensity = person / seg.data.length;
-          }
-        } else {
-          // Hands present → clear body mask (hand forces take over)
-          currentMask = null;
-          motionIntensity = 0;
-          maskDensity = 0;
-        }
+      // Show hint only when camera is active but no hands are in frame
+      hintEl.style.opacity = (cameraLive && hands.length === 0) ? '1' : '0';
 
+      if (cameraLive) {
         const forcePoints: ForcePoint[] = [];
 
-        const handDrawData = hands.map(hand => {
+        const palmSpeeds = handTracker.palmSpeeds;
+
+        const handDrawData = hands.map((hand, handIdx) => {
           const landmarks = hand.landmarks.map(lm => handTracker.toCanvas(lm, cW, cH));
 
-          // Fingertips: strong focused force
+          // Velocity-based force scaling.
+          // palmSpeeds is in normalised units/s: 0 = still, ~0.5 = gentle, ~2+ = fast swipe.
+          // Map to a multiplier: stationary → 0.25×, moderate → 1×, fast swipe → 3.5×.
+          const speed = palmSpeeds[handIdx] ?? 0;
+          const velScale = Math.max(0.25, Math.min(3.5, speed / 0.5));
+
+          // Fingertips: strong focused force, scaled by hand velocity
           for (const ti of FINGERTIP_INDICES) {
             const lm = landmarks[ti];
-            if (lm) forcePoints.push({ x: lm.x, y: lm.y, radius: 100, strength: 22 });
+            if (lm) forcePoints.push({ x: lm.x, y: lm.y, radius: 130, strength: 38 * velScale });
           }
-          // Palm center (landmark 9 — base of middle finger): broader softer force
+          // Palm center: broad soft force, also velocity-scaled
           const palm = landmarks[9];
-          if (palm) forcePoints.push({ x: palm.x, y: palm.y, radius: 160, strength: 10 });
+          if (palm) forcePoints.push({ x: palm.x, y: palm.y, radius: 190, strength: 20 * velScale });
 
           return { landmarks, connections: HAND_CONNECTIONS, fingertipIndices: FINGERTIP_INDICES };
         });
@@ -242,7 +287,6 @@ async function main(): Promise<void> {
         particleSystem.setForcePoints(forcePoints);
         renderer.renderHands(handDrawData);
       } else {
-        // No camera: clear any stale hand visuals
         renderer.renderHands([]);
       }
 
@@ -250,23 +294,15 @@ async function main(): Promise<void> {
       textCycler.tick(now);
 
       // ── Physics ────────────────────────────────────────────────────────────
-      particleSystem.updateAll(dt, currentMask, motionIntensity, cW, cH);
+      particleSystem.updateAll(dt, cW, cH);
 
       // ── Stats ──────────────────────────────────────────────────────────────
-      // Count particles outside canvas bounds to diagnose disappearing issue.
-      let outOfBounds = 0;
-      for (const p of particleSystem.activeParticles) {
-        if (p.y < -10 || p.y > cH + 10 || p.x < -10 || p.x > cW + 10) outOfBounds++;
-      }
-
       stats.update({
-        aiFps: cameraLive ? segmenter.fps : 0,
-        maskDensity,
-        motionIntensity,
-        particleCount: particleSystem.count,
-        outOfBounds,
-        mode: config.mode,
         renderFps: renderer.fps,
+        particleCount: particleSystem.count,
+        avgSpeed: particleSystem.avgSpeed,
+        mode: config.mode,
+        handsTracked: cameraLive ? handTracker.hands.length : 0,
       });
     },
     onLodReduce: () => particleSystem.reduceLOD(),
@@ -277,13 +313,11 @@ async function main(): Promise<void> {
 
   // ── Text cycler ───────────────────────────────────────────────────────────
 
-  // Single fixed phrase for testing; Space key still advances (loops back to same text).
-  // Text can be changed at runtime via kta:text-change from SettingsPanel.
   const PHRASES = ['KINETYPE'];
 
   const textCycler = new TextCycler({
     phrases: PHRASES,
-    intervalMs: Number.MAX_SAFE_INTEGER, // disable auto-cycle; Space key still works
+    intervalMs: Number.MAX_SAFE_INTEGER,
     canvasWidth: renderer.canvasWidth,
     canvasHeight: renderer.canvasHeight,
     maxParticles: config.particleCount,
@@ -293,10 +327,8 @@ async function main(): Promise<void> {
     particleSystem.transitionTo(phrase, renderer.canvasWidth, renderer.canvasHeight);
   });
 
-  // Init particles with first phrase
   particleSystem.init(PHRASES[0], renderer.canvasWidth, renderer.canvasHeight);
 
-  // Space → next phrase immediately
   window.addEventListener('keydown', e => {
     if (e.code === 'Space') { e.preventDefault(); textCycler.next(); }
   });
@@ -305,8 +337,6 @@ async function main(): Promise<void> {
 
   const camera = new Camera();
 
-  // Dark tint layer between webcam video and Pixi canvas.
-  // Becomes visible when camera is live so the video feed is readable but subdued.
   const videoTint = document.createElement('div');
   videoTint.id = 'video-tint';
   Object.assign(videoTint.style, {
@@ -319,7 +349,6 @@ async function main(): Promise<void> {
   });
   document.body.appendChild(videoTint);
 
-  // Video element goes at z-index 0, behind the tint and Pixi canvas
   Object.assign(camera.videoElement.style, {
     position: 'fixed',
     top: '0',
@@ -329,7 +358,7 @@ async function main(): Promise<void> {
     objectFit: 'cover',
     transform: 'scaleX(-1)',
     zIndex: '0',
-    display: 'none',        // shown only when camera is live
+    display: 'none',
     pointerEvents: 'none',
   });
   document.body.appendChild(camera.videoElement);
@@ -338,36 +367,13 @@ async function main(): Promise<void> {
     try {
       await camera.start();
       cameraLive = true;
-      // Show the webcam feed behind the canvas
       camera.videoElement.style.display = 'block';
       videoTint.style.display = 'block';
-      demoMode.stop();
-      currentMask = null;
-      motionAnalyzer.reset();
-      segmenter.start();
       handTracker.start();
     } catch {
-      // Permission denied or no camera → stay in mouse-only / demo mode
-      console.warn('Camera unavailable, staying in demo/mouse mode.');
+      console.warn('Camera unavailable, continuing in mouse-only mode.');
     }
   }
-
-  // ── Demo mode ─────────────────────────────────────────────────────────────
-
-  const demoMode = new DemoMode(
-    (mask) => {
-      // Demo masks feed the physics loop if camera not live
-      if (!cameraLive) {
-        currentMask = mask;
-        const result = motionAnalyzer.analyze(mask);
-        motionIntensity = result.motionIntensity * 0.6; // gentler in demo
-        maskDensity = 0.12; // approximate static coverage
-      }
-    },
-    () => { void enableCamera(); }
-  );
-
-  demoMode.start();
 
   // ── Finish loading ────────────────────────────────────────────────────────
 
@@ -375,24 +381,27 @@ async function main(): Promise<void> {
   await new Promise(r => setTimeout(r, 200));
   loading.el.remove();
 
-  // Try camera automatically (silent fail → demo continues)
   void enableCamera();
 
   // ── UI ────────────────────────────────────────────────────────────────────
 
   new PrivacyBanner().show();
-  new SettingsPanel(config);
-  buildModeBar(config, mode => { config.mode = mode; });
+  const settingsPanel = new SettingsPanel(config);
 
-  // Settings panel events → live config
+  let syncModeBar: (m: InteractionMode) => void = () => { };
+  const setMode = (mode: InteractionMode): void => {
+    config.mode = mode;
+    syncModeBar(mode);
+    settingsPanel.setMode(mode);
+  };
+  syncModeBar = buildModeBar(config.mode, setMode);
+
   document.addEventListener('kta:settings-change', e => {
     const d = e.detail;
     if (d.repulsionForce !== undefined) config.repulsionForce = d.repulsionForce;
-    if (d.mode !== undefined) config.mode = d.mode;
-    // particleCount changes require re-init (handled gracefully by LOD)
+    if (d.mode !== undefined) setMode(d.mode);
   });
 
-  // Text change from Settings → update TextCycler + transition particles
   document.addEventListener('kta:text-change', e => {
     textCycler.setPhrase(e.detail.text);
   });
@@ -421,16 +430,9 @@ async function main(): Promise<void> {
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      segmenter.stop();
       handTracker.stop();
-      demoMode.stop();
-    } else {
-      if (cameraLive) {
-        segmenter.start();
-        handTracker.start();
-      } else {
-        demoMode.start();
-      }
+    } else if (cameraLive) {
+      handTracker.start();
     }
   });
 }

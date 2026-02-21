@@ -1,10 +1,11 @@
 import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
+import { VISION_WASM_PATH } from './Segmenter.js';
+
+type WasmFileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
 
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task';
-
-const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm';
 
 /** Hand landmark indices used for interaction and drawing. */
 export const FINGERTIP_INDICES = [4, 8, 12, 16, 20] as const;
@@ -38,24 +39,67 @@ export class HandTracker {
   private _lastTime = 0;
   private readonly minIntervalMs = 1000 / 20; // cap at 20fps for responsive hand tracking
 
-  async load(): Promise<void> {
-    const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
-    this.landmarker = await HandLandmarker.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: MODEL_URL },
-      runningMode: 'VIDEO',
+  /**
+   * Per-hand palm speed in normalized units/second, updated on each detection.
+   * Normalized coords are in [0,1] × [0,1], so 1 unit/s = crossing the full
+   * webcam frame in 1 second. Typical fast swipe ≈ 1.5–3 units/s.
+   */
+  private _palmSpeeds: number[] = [];
+  /** Previous wrist positions (landmark 0) per hand slot, in normalized coords. */
+  private _prevWrist: Array<{ x: number; y: number } | undefined> = [];
+
+  async load(fileset?: WasmFileset): Promise<void> {
+    const vision = fileset ?? await FilesetResolver.forVisionTasks(VISION_WASM_PATH);
+
+    const opts = {
+      runningMode: 'VIDEO' as const,
       numHands: 2,
-    });
+    };
+
+    // Try GPU delegate first — falls back to CPU if WebGL is unavailable.
+    try {
+      this.landmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+        ...opts,
+      });
+    } catch {
+      this.landmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
+        ...opts,
+      });
+    }
   }
 
-  /** Run hand detection on the current video frame (timestamp-gated to 30fps). */
+  /** Run hand detection on the current video frame (timestamp-gated to 20fps). */
   detect(video: HTMLVideoElement): void {
     if (!this.landmarker || !this._isRunning) return;
     const now = performance.now();
-    if (now - this._lastTime < this.minIntervalMs) return;
+    const elapsed = now - this._lastTime;
+    if (elapsed < this.minIntervalMs) return;
+
+    // Capture elapsed before updating _lastTime so we have the true detection interval.
+    const detDtSec = Math.max(elapsed / 1000, 0.016);
     this._lastTime = now;
 
     const result = this.landmarker.detectForVideo(video, now);
     this._hands = result.landmarks.map(lms => ({ landmarks: lms }));
+
+    // Compute per-hand palm speed from wrist (landmark 0) displacement.
+    this._palmSpeeds = this._hands.map((hand, i) => {
+      const wrist = hand.landmarks[0]; // most stable point for translation
+      const prev = this._prevWrist[i];
+      this._prevWrist[i] = { x: wrist.x, y: wrist.y };
+      if (!prev) return 0;
+      const dx = wrist.x - prev.x;
+      const dy = wrist.y - prev.y;
+      return Math.sqrt(dx * dx + dy * dy) / detDtSec;
+    });
+
+    // Clear stale entries for hands that are no longer tracked.
+    for (let i = this._hands.length; i < this._prevWrist.length; i++) {
+      this._prevWrist[i] = undefined;
+    }
+    this._palmSpeeds.length = this._hands.length;
   }
 
   /**
@@ -78,6 +122,14 @@ export class HandTracker {
     return this._hands.length > 0;
   }
 
+  /**
+   * Per-hand palm speed in normalized units/second (index matches `hands`).
+   * 0 = stationary, ~0.5 = gentle move, ~2+ = fast swipe.
+   */
+  get palmSpeeds(): number[] {
+    return this._palmSpeeds;
+  }
+
   start(): void {
     this._isRunning = true;
   }
@@ -85,5 +137,7 @@ export class HandTracker {
   stop(): void {
     this._isRunning = false;
     this._hands = [];
+    this._palmSpeeds = [];
+    this._prevWrist = [];
   }
 }
