@@ -12,6 +12,12 @@ export interface TextSamplerOptions {
   color?: string;
 }
 
+/**
+ * Below this particle count the sampler places particles on letter edges
+ * (perimeter tracing). At or above this count it uses uniform fill.
+ */
+const EDGE_BIAS_THRESHOLD = 1500;
+
 export class TextSampler {
   private readonly offscreen: OffscreenCanvas;
   private readonly ctx: OffscreenCanvasRenderingContext2D;
@@ -62,8 +68,17 @@ export class TextSampler {
     const x = (canvasWidth - measured) / 2;
     const y = canvasHeight / 2 + fontSize * 0.35;
 
+    // ── Render text ───────────────────────────────────────────────────────────
+    // Fill first, then stroke with a thick line to fatten the letter mass.
+    // This ensures consistent thick strokes across all platforms — on Android
+    // the system sans-serif (Roboto/Noto) has thinner strokes than Arial Black,
+    // which would otherwise make edge detection produce thin horizontal dashes.
     this.ctx.fillStyle = color;
     this.ctx.fillText(text, x, y);
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = Math.max(2, Math.round(fontSize * 0.12));
+    this.ctx.lineJoin = 'round';
+    this.ctx.strokeText(text, x, y);
 
     // ── Pixel scan ────────────────────────────────────────────────────────────
     const imageData = this.ctx.getImageData(0, 0, canvasWidth, canvasHeight);
@@ -106,21 +121,27 @@ export class TextSampler {
       return result;
     };
 
-    const totalRaw = edgePoints.length + interiorPoints.length;
-    if (totalRaw <= maxParticles) {
-      // No subsampling needed — return edges first so LOD truncation removes interior first.
-      return [...edgePoints, ...interiorPoints];
+    // Always place edges before interior so that LOD subsampling (which takes
+    // a uniformly-spaced slice of homePositions) naturally retains more edges
+    // as particle count decreases.
+    const ordered = [...edgePoints, ...interiorPoints];
+    const totalRaw = ordered.length;
+
+    if (totalRaw <= maxParticles) return ordered;
+
+    // ── Sampling strategy ─────────────────────────────────────────────────────
+    if (maxParticles < EDGE_BIAS_THRESHOLD) {
+      // Perimeter mode: give 70 % of the budget to edge pixels so particles
+      // trace the letter outlines clearly at low counts.
+      const edgeBudget = Math.min(edgePoints.length, Math.ceil(maxParticles * 0.7));
+      const interiorBudget = maxParticles - edgeBudget;
+      return [
+        ...subsampleArr(edgePoints, edgeBudget),
+        ...subsampleArr(interiorPoints, interiorBudget),
+      ];
+    } else {
+      // Fill mode: uniform subsampling of all pixels (edges-first order kept).
+      return subsampleArr(ordered, maxParticles);
     }
-
-    // ── Edge-biased subsampling ───────────────────────────────────────────────
-    // Give edges up to 70 % of the particle budget so that at lower particle
-    // counts (LOD reductions, mobile) the letter outlines stay readable.
-    const edgeBudget = Math.min(edgePoints.length, Math.ceil(maxParticles * 0.7));
-    const interiorBudget = maxParticles - edgeBudget;
-
-    return [
-      ...subsampleArr(edgePoints, edgeBudget),
-      ...subsampleArr(interiorPoints, interiorBudget),
-    ];
   }
 }

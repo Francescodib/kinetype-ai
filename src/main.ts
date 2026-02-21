@@ -404,6 +404,10 @@ async function main(): Promise<void> {
       config.particleCount = d.particleCount;
       particleSystem.setParticleCount(d.particleCount);
     }
+    if (d.showWebcam !== undefined && cameraLive) {
+      camera.videoElement.style.display = d.showWebcam ? 'block' : 'none';
+      videoTint.style.display = d.showWebcam ? 'block' : 'none';
+    }
   });
 
   document.addEventListener('kta:text-change', e => {

@@ -5,6 +5,7 @@ export interface SettingsChangeEvent {
   particleCount?: number;
   repulsionForce?: number;
   mode?: InteractionMode;
+  showWebcam?: boolean;
 }
 
 export interface TextChangeEvent {
@@ -70,6 +71,9 @@ export class SettingsPanel {
       emitChange({ repulsionForce: v });
     });
     this._addModeSelect(this.body, config.mode);
+    this._addToggle(this.body, 'Show webcam', true, v => {
+      emitChange({ showWebcam: v });
+    });
 
     this.el.appendChild(header);
     this.el.appendChild(this.body);
@@ -188,6 +192,39 @@ export class SettingsPanel {
 
     lbl.appendChild(name);
     lbl.appendChild(val);
+    row.appendChild(lbl);
+    row.appendChild(input);
+    parent.appendChild(row);
+  }
+
+  private _addToggle(
+    parent: HTMLElement,
+    label: string,
+    initial: boolean,
+    onChange: (v: boolean) => void
+  ): void {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;margin-top:6px;';
+
+    const lbl = document.createElement('label');
+    lbl.textContent = label;
+    Object.assign(lbl.style, {
+      cursor: 'pointer',
+      userSelect: 'none',
+    });
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = initial;
+    Object.assign(input.style, {
+      accentColor: '#39ff14',
+      width: '14px',
+      height: '14px',
+      cursor: 'pointer',
+    });
+    input.addEventListener('change', () => onChange(input.checked));
+    lbl.htmlFor = input.id = `kta-toggle-${label.replace(/\s+/g, '-').toLowerCase()}`;
+
     row.appendChild(lbl);
     row.appendChild(input);
     parent.appendChild(row);
