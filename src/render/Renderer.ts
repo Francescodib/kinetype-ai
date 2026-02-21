@@ -1,6 +1,7 @@
 import {
   Application,
   ParticleContainer,
+  Particle as PixiParticle,
   Sprite,
   Texture,
   Graphics,
@@ -21,9 +22,11 @@ export interface RendererOptions {
 
 export class Renderer {
   private app!: Application;
+  // ParticleContainer uses the lightweight Pixi Particle class (not Sprite)
   private particleContainer!: ParticleContainer;
+  private pixiParticles: PixiParticle[] = [];
+  // Glow layer uses a regular Container + Sprite (supports addChild)
   private glowContainer!: Container;
-  private sprites: Sprite[] = [];
   private glowSprites: Sprite[] = [];
   private circleTexture!: Texture;
   private readonly fpsMonitor = new FPSMonitor(60);
@@ -50,25 +53,27 @@ export class Renderer {
 
     this.circleTexture = this._makeCircleTexture(3);
 
-    // Glow layer (blurred copy, drawn under)
+    // Glow layer: blurred Container with Sprites, drawn under main particles
     this.glowContainer = new Container();
     const blur = new BlurFilter({ strength: 8, quality: 2 });
     this.glowContainer.filters = [blur];
     this.glowContainer.alpha = 0.25;
     this.app.stage.addChild(this.glowContainer);
 
-    // Main particle container
+    // Main ParticleContainer: uses Pixi Particle objects, color updates every frame
     this.particleContainer = new ParticleContainer({
+      texture: this.circleTexture,
       dynamicProperties: {
         position: true,
-        tint: true,
-        alpha: false,
-        scale: false,
+        color: true,    // needed to update tint each frame
+        rotation: false,
+        uvs: false,
+        vertex: false,
       },
     });
     this.app.stage.addChild(this.particleContainer);
 
-    this._syncSprites();
+    this._syncParticles();
     this.app.ticker.add(this._tick.bind(this));
   }
 
@@ -79,16 +84,19 @@ export class Renderer {
     return this.app.renderer.generateTexture(g);
   }
 
-  private _syncSprites(): void {
+  private _syncParticles(): void {
     const particles = this.opts.particleSystem.activeParticles;
     const needed = particles.length;
 
     // Grow
-    while (this.sprites.length < needed) {
-      const s = new Sprite(this.circleTexture);
-      s.anchor.set(0.5);
-      this.particleContainer.addChild(s);
-      this.sprites.push(s);
+    while (this.pixiParticles.length < needed) {
+      const pp = new PixiParticle({
+        texture: this.circleTexture,
+        anchorX: 0.5,
+        anchorY: 0.5,
+      });
+      this.particleContainer.addParticle(pp);
+      this.pixiParticles.push(pp);
 
       const gs = new Sprite(this.circleTexture);
       gs.anchor.set(0.5);
@@ -97,8 +105,8 @@ export class Renderer {
     }
 
     // Shrink
-    while (this.sprites.length > needed) {
-      this.particleContainer.removeChild(this.sprites.pop()!);
+    while (this.pixiParticles.length > needed) {
+      this.particleContainer.removeParticle(this.pixiParticles.pop()!);
       this.glowContainer.removeChild(this.glowSprites.pop()!);
     }
   }
@@ -119,19 +127,18 @@ export class Renderer {
     return this.app.screen.height;
   }
 
-  private _tick(ticker: { deltaMS: number; lastTime: number }): void {
+  private _tick(ticker: { deltaMS: number }): void {
     const now = performance.now();
     this.fpsMonitor.tick(now);
 
     const dtSec = ticker.deltaMS / 1000;
     this.opts.onUpdate(dtSec, this.mask, now);
 
-    // LOD check
     const action = this.fpsMonitor.lodAction(now);
     if (action === 'reduce') this.opts.onLodReduce();
     else if (action === 'restore') this.opts.onLodRestore();
 
-    this._syncSprites();
+    this._syncParticles();
     this._drawParticles(this.opts.particleSystem.activeParticles);
   }
 
@@ -140,10 +147,10 @@ export class Renderer {
       const p = particles[i];
       const color = p.displayColor;
 
-      const s = this.sprites[i];
-      s.x = p.x;
-      s.y = p.y;
-      s.tint = color;
+      const pp = this.pixiParticles[i];
+      pp.x = p.x;
+      pp.y = p.y;
+      pp.tint = color;
 
       const gs = this.glowSprites[i];
       gs.x = p.x;
