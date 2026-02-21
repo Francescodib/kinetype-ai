@@ -1,8 +1,17 @@
 import { Camera } from './camera/Camera.js';
 import { Segmenter } from './ai/Segmenter.js';
 import { StatsOverlay } from './ui/StatsOverlay.js';
+import { ParticleSystem } from './physics/ParticleSystem.js';
+import { Renderer } from './render/Renderer.js';
+import { MotionAnalyzer } from './utils/MotionAnalyzer.js';
+import type { SegmentationMask, InteractionMode, SimConfig } from './types/index.js';
 
-// ── UI elements ──────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const PHRASES = ['KINETYPE', 'MOVE ME', 'HELLO', 'TOUCH ME', 'PLAY'];
+const PHRASE_INTERVAL_MS = 8000;
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
 
 function buildLoadingScreen(): HTMLElement {
   const el = document.createElement('div');
@@ -30,7 +39,7 @@ function buildLoadingScreen(): HTMLElement {
   return el;
 }
 
-function buildErrorScreen(message: string): HTMLElement {
+function buildErrorScreen(message: string): void {
   const el = document.createElement('div');
   el.id = 'error-screen';
   Object.assign(el.style, {
@@ -46,32 +55,67 @@ function buildErrorScreen(message: string): HTMLElement {
     zIndex: '10000',
   });
   el.innerHTML = `
-    <div style="font-size:2rem;font-weight:900;margin-bottom:1rem;">KINETYPE</div>
-    <div style="font-size:1rem;opacity:0.8;max-width:380px;text-align:center;">${message}</div>
+    <div style="font-size:2rem;font-weight:900;margin-bottom:1rem;color:#fff;">KINETYPE</div>
+    <div style="font-size:1rem;opacity:0.85;max-width:400px;text-align:center;line-height:1.6;">${message}</div>
   `;
   document.body.appendChild(el);
-  return el;
 }
 
-function buildDebugCanvas(): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.id = 'debug-canvas';
-  Object.assign(canvas.style, {
+function buildModeUI(
+  config: SimConfig,
+  onChange: (mode: InteractionMode) => void
+): void {
+  const panel = document.createElement('div');
+  panel.id = 'mode-panel';
+  Object.assign(panel.style, {
     position: 'fixed',
-    top: '0',
-    left: '0',
-    width: '100%',
-    height: '100%',
-    objectFit: 'cover',
-    transform: 'scaleX(-1)',
-    zIndex: '1',
-    background: '#0a0a0f',
+    bottom: '16px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    display: 'flex',
+    gap: '8px',
+    zIndex: '9999',
   });
-  document.body.appendChild(canvas);
-  return canvas;
-}
 
-// ── iOS / unsupported browser warning ────────────────────────────────────────
+  const modes: InteractionMode[] = ['repulse', 'attract', 'vortex', 'freeze'];
+  const labels = ['1 Repulse', '2 Attract', '3 Vortex', '4 Freeze'];
+
+  const buttons: HTMLButtonElement[] = [];
+  modes.forEach((mode, i) => {
+    const btn = document.createElement('button');
+    btn.textContent = labels[i];
+    btn.dataset['mode'] = mode;
+    Object.assign(btn.style, {
+      background: mode === config.mode ? '#39ff14' : 'rgba(0,0,0,0.6)',
+      color: mode === config.mode ? '#000' : '#39ff14',
+      border: '1px solid #39ff14',
+      borderRadius: '4px',
+      padding: '6px 14px',
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      cursor: 'pointer',
+      transition: 'background 0.15s, color 0.15s',
+    });
+    btn.addEventListener('click', () => {
+      onChange(mode);
+      buttons.forEach((b, j) => {
+        const active = modes[j] === mode;
+        b.style.background = active ? '#39ff14' : 'rgba(0,0,0,0.6)';
+        b.style.color = active ? '#000' : '#39ff14';
+      });
+    });
+    buttons.push(btn);
+    panel.appendChild(btn);
+  });
+
+  document.body.appendChild(panel);
+
+  // Keyboard shortcuts 1–4
+  window.addEventListener('keydown', e => {
+    const idx = ['1', '2', '3', '4'].indexOf(e.key);
+    if (idx >= 0) buttons[idx].click();
+  });
+}
 
 function isIOS(): boolean {
   return /iP(hone|od|ad)/.test(navigator.userAgent);
@@ -84,7 +128,7 @@ async function main(): Promise<void> {
 
   if (isIOS()) {
     buildErrorScreen(
-      'KineType is best experienced on Chrome or Firefox on desktop.<br>iOS Safari has limited WebAssembly support.'
+      'KineType is best experienced on Chrome or Firefox on desktop. iOS Safari has limited WebAssembly support.'
     );
     return;
   }
@@ -98,7 +142,7 @@ async function main(): Promise<void> {
   try {
     loadingBar.style.width = '20%';
     await segmenter.load();
-    loadingBar.style.width = '70%';
+    loadingBar.style.width = '65%';
   } catch (err) {
     console.error('Failed to load segmentation model:', err);
     loadingScreen.remove();
@@ -113,78 +157,159 @@ async function main(): Promise<void> {
   const camera = new Camera();
   document.body.appendChild(camera.videoElement);
 
+  let cameraAvailable = true;
   try {
     await camera.start();
   } catch {
-    if (camera.status === 'denied') {
-      loadingScreen.remove();
-      buildErrorScreen('Webcam access denied. Please allow camera access and refresh the page.');
-      return;
-    }
-    loadingScreen.remove();
-    buildErrorScreen('Could not access webcam. Please check your device settings.');
-    return;
+    cameraAvailable = false;
+    // Mouse-only fallback — don't show error prominently
+    console.warn('Webcam unavailable, running in mouse-only mode.');
   }
+
+  loadingBar.style.width = '90%';
+  loadingMsg.textContent = 'Building particle system\u2026';
+
+  // ── Config ────────────────────────────────────────────────────────────────
+
+  const config: SimConfig = {
+    particleCount: 6000,
+    repulsionForce: 3.5,
+    friction: 0.88,
+    ease: 0.06,
+    mode: 'repulse',
+  };
+
+  // ── Particle system ───────────────────────────────────────────────────────
+
+  const particleSystem = new ParticleSystem(config);
+  const motionAnalyzer = new MotionAnalyzer();
+  const stats = new StatsOverlay();
+
+  let currentPhraseIdx = 0;
+  let lastPhraseTime = 0;
+  let motionIntensity = 0;
+  let maskDensity = 0;
+  let currentMask: SegmentationMask | null = null;
+
+  // ── Renderer ──────────────────────────────────────────────────────────────
+
+  const renderer = new Renderer({
+    particleSystem,
+    onUpdate: (dt, _mask, now) => {
+      // Feed AI frame
+      if (cameraAvailable && camera.isReady) {
+        segmenter.segmentFrame(camera.videoElement);
+      }
+
+      currentMask = segmenter.lastMask;
+      renderer.setMask(currentMask);
+
+      // Motion intensity
+      if (currentMask) {
+        motionIntensity = motionAnalyzer.analyze(currentMask);
+        const total = currentMask.width * currentMask.height;
+        let person = 0;
+        for (let i = 0; i < currentMask.data.length; i++) {
+          if (currentMask.data[i] > 0) person++;
+        }
+        maskDensity = person / total;
+      }
+
+      // Text cycling: Space or timer
+      if (now - lastPhraseTime > PHRASE_INTERVAL_MS) {
+        _nextPhrase(now);
+      }
+
+      particleSystem.updateAll(
+        dt,
+        currentMask,
+        motionIntensity,
+        renderer.canvasWidth,
+        renderer.canvasHeight
+      );
+
+      stats.update({
+        aiFps: segmenter.fps,
+        maskDensity,
+        motionIntensity,
+        particleCount: particleSystem.count,
+        mode: config.mode,
+        renderFps: renderer.fps,
+      });
+    },
+    onLodReduce: () => {
+      particleSystem.reduceLOD();
+    },
+    onLodRestore: () => {
+      particleSystem.restoreLOD(renderer.canvasWidth, renderer.canvasHeight);
+    },
+  });
+
+  await renderer.init();
+
+  // Init particles after renderer so canvas dimensions are known
+  particleSystem.init(PHRASES[0], renderer.canvasWidth, renderer.canvasHeight);
+  lastPhraseTime = performance.now();
 
   loadingBar.style.width = '100%';
-  await new Promise(r => setTimeout(r, 300));
+  await new Promise(r => setTimeout(r, 200));
   loadingScreen.remove();
 
-  // Build debug overlay canvas
-  const debugCanvas = buildDebugCanvas();
-  const debugCtx = debugCanvas.getContext('2d')!;
-  debugCanvas.width = camera.width;
-  debugCanvas.height = camera.height;
+  // ── Mouse tracking ────────────────────────────────────────────────────────
 
-  const stats = new StatsOverlay();
-  segmenter.start();
+  window.addEventListener('mousemove', e => {
+    particleSystem.setMousePos({ x: e.clientX, y: e.clientY });
+  });
+  window.addEventListener('mouseleave', () => {
+    particleSystem.setMousePos(null);
+  });
 
-  // ── Main loop ──────────────────────────────────────────────────────────────
-  let maskDensity = 0;
+  // Touch support
+  window.addEventListener('touchmove', e => {
+    const t = e.touches[0];
+    if (t) particleSystem.setMousePos({ x: t.clientX, y: t.clientY });
+  }, { passive: true });
+  window.addEventListener('touchend', () => {
+    particleSystem.setMousePos(null);
+  });
 
-  function loop(): void {
-    if (camera.isReady) {
-      segmenter.segmentFrame(camera.videoElement);
-    }
+  // ── Text cycling ──────────────────────────────────────────────────────────
 
-    const mask = segmenter.lastMask;
-
-    if (mask) {
-      if (debugCanvas.width !== mask.width || debugCanvas.height !== mask.height) {
-        debugCanvas.width = mask.width;
-        debugCanvas.height = mask.height;
-      }
-
-      const imgData = debugCtx.createImageData(mask.width, mask.height);
-      let personPixels = 0;
-      const total = mask.width * mask.height;
-
-      for (let i = 0; i < total; i++) {
-        // MediaPipe selfie_segmenter category mask: 1 = person, 0 = background
-        const isPerson = mask.data[i] > 0;
-        const v = isPerson ? 255 : 0;
-        imgData.data[i * 4] = v;
-        imgData.data[i * 4 + 1] = v;
-        imgData.data[i * 4 + 2] = v;
-        imgData.data[i * 4 + 3] = 255;
-        if (isPerson) personPixels++;
-      }
-      debugCtx.putImageData(imgData, 0, 0);
-      maskDensity = personPixels / total;
-    }
-
-    stats.update({
-      aiFps: segmenter.fps,
-      maskDensity,
-      motionIntensity: 0, // placeholder until Phase 3
-    });
-
-    requestAnimationFrame(loop);
+  function _nextPhrase(now: number): void {
+    currentPhraseIdx = (currentPhraseIdx + 1) % PHRASES.length;
+    particleSystem.transitionTo(
+      PHRASES[currentPhraseIdx],
+      renderer.canvasWidth,
+      renderer.canvasHeight
+    );
+    lastPhraseTime = now;
   }
 
-  requestAnimationFrame(loop);
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      _nextPhrase(performance.now());
+    }
+  });
 
-  // Pause AI when tab is hidden
+  // ── Mode switcher UI ──────────────────────────────────────────────────────
+
+  buildModeUI(config, mode => {
+    config.mode = mode;
+  });
+
+  // ── Resize ────────────────────────────────────────────────────────────────
+
+  window.addEventListener('resize', () => {
+    particleSystem.init(
+      PHRASES[currentPhraseIdx],
+      renderer.canvasWidth,
+      renderer.canvasHeight
+    );
+  });
+
+  // ── Visibility API ────────────────────────────────────────────────────────
+
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       segmenter.stop();
@@ -192,6 +317,8 @@ async function main(): Promise<void> {
       segmenter.start();
     }
   });
+
+  segmenter.start();
 }
 
 main().catch(console.error);

@@ -1,9 +1,10 @@
 export interface StatsData {
   aiFps: number;
-  maskDensity: number; // 0–1, avg segmentation confidence proxy
-  motionIntensity: number; // 0–1 placeholder
+  maskDensity: number; // 0–1
+  motionIntensity: number; // 0–1
   particleCount?: number;
   mode?: string;
+  renderFps?: number;
 }
 
 export class StatsOverlay {
@@ -28,6 +29,7 @@ export class StatsOverlay {
       zIndex: '9999',
       userSelect: 'none',
       backdropFilter: 'blur(4px)',
+      minWidth: '160px',
     });
     document.body.appendChild(this.el);
 
@@ -43,8 +45,10 @@ export class StatsOverlay {
     const motion = (data.motionIntensity * 100).toFixed(0);
     const particles = data.particleCount !== undefined ? `\nParticles  ${data.particleCount}` : '';
     const mode = data.mode ? `\nMode       ${data.mode}` : '';
+    const rFps = data.renderFps !== undefined ? `\nRender FPS ${data.renderFps}` : '';
     this.el.innerText =
       `AI FPS     ${data.aiFps}` +
+      rFps +
       `\nMask       ${density}%` +
       `\nMotion     ${motion}%` +
       particles +
