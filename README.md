@@ -2,7 +2,7 @@
 
 Interactive kinetic typography where text made of particles reacts in real-time to your body movements, captured via webcam.
 
-**Live demo:** https://kinetype-ai.vercel.app
+**Live demo:** https://francescodib.github.io/kinetype-ai/
 
 ---
 
